@@ -1,0 +1,10 @@
+# Runtime/data mounts
+data/
+ipc/
+workspace/
+_stress/
+
+# Local envs / caches
+.venv-lucy-voz
+*.log
+.DS_Store
