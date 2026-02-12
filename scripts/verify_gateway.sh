@@ -17,8 +17,8 @@ for svc in clawdbot-gateway.service clawdbot-node.service; do
   fi
 done
 
-listener="$(ss -ltnp | rg '127.0.0.1:18789|\[::1\]:18789' || true)"
-if printf "%s\n" "$listener" | rg -q 'clawdbot-gatewa'; then
+listener="$(ss -ltnp | grep -E '127.0.0.1:18789|\[::1\]:18789' || true)"
+if printf "%s\n" "$listener" | grep -q 'clawdbot-gatewa'; then
   fail "port 18789 is owned by clawdbot-gateway; expected openclaw-gateway"
 fi
 
@@ -42,8 +42,8 @@ if ! openclaw health >/dev/null 2>&1; then
   fi
 fi
 
-proc_line="$(ss -ltnp | rg '127.0.0.1:18789|\[::1\]:18789' || true)"
-if ! printf "%s\n" "$proc_line" | rg -q 'openclaw-gatewa'; then
+proc_line="$(ss -ltnp | grep -E '127.0.0.1:18789|\[::1\]:18789' || true)"
+if ! printf "%s\n" "$proc_line" | grep -q 'openclaw-gatewa'; then
   fail "port 18789 is not owned by openclaw-gateway"
 fi
 
