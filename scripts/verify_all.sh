@@ -3,6 +3,8 @@ set -euo pipefail
 
 echo "== verify_gateway ==" >&2
 ./scripts/verify_gateway.sh
+echo "== verify_plugins ==" >&2
+./scripts/verify_plugins.sh 1>&2
 
 echo "== verify_codex_subscription ==" >&2
 ./scripts/verify_codex_subscription.sh
