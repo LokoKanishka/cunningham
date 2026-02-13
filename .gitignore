@@ -3,6 +3,7 @@ data/
 ipc/
 workspace/
 _stress/
+_tmp/
 backups/
 .env.n8n.local
 node_modules/

@@ -21,6 +21,9 @@ services:
       - EXTERNAL_FRONTEND_HOOKS_URLS=
       - N8N_METRICS=true
       - QUEUE_HEALTH_CHECK_ACTIVE=true
+      - N8N_RUNNERS_MODE=external
+      - N8N_RUNNERS_AUTH_TOKEN=lucy-local-runner-token
+      - N8N_PYTHON_ENABLED=false
       - GENERIC_TIMEZONE=America/Argentina/Buenos_Aires
       - N8N_RESTRICT_FILE_ACCESS_TO=/data/lucy_ipc;/home/node/.n8n-files
       - ANTIGRAVITY_URL=http://127.0.0.1:5000
@@ -37,6 +40,27 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:5678/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  runners:
+    image: n8nio/runners@sha256:d19d15e4820b6a85ed5e9e0d62cdfec4b9b4e879516a5be4424e6bbd4796bafb
+    container_name: lucy_brain_runners
+    network_mode: "host"
+    restart: unless-stopped
+    depends_on:
+      n8n:
+        condition: service_healthy
+    command: ["javascript"]
+    environment:
+      - N8N_RUNNERS_AUTH_TOKEN=lucy-local-runner-token
+      - N8N_RUNNERS_TASK_BROKER_URI=http://127.0.0.1:5679
+    volumes:
+      - ./config/n8n-task-runners.json:/etc/n8n-task-runners.json:ro
+      - ./ipc:/data/lucy_ipc:rw
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:5680/healthz || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 12

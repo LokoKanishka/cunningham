@@ -11,6 +11,7 @@ CONTENT_TYPE="${CONTENT_TYPE:-application/json}"
 REQUEST_BODY="${REQUEST_BODY:-}"
 READY_HTTP_CODE="${READY_HTTP_CODE:-200}"
 P95_MAX_S="${P95_MAX_S:-}"
+P99_MAX_S="${P99_MAX_S:-}"
 ENDPOINT_LABEL="${ENDPOINT_LABEL:-}"
 
 OUTDIR="${OUTDIR:-./_stress}"
@@ -55,6 +56,7 @@ wait_ready() {
   echo "URL=$URL METHOD=$METHOD"
   echo "N=$N P=$P TIMEOUT=$TIMEOUT OK_RATE_MIN=$OK_RATE_MIN"
   echo "P95_MAX_S=${P95_MAX_S:-none}"
+  echo "P99_MAX_S=${P99_MAX_S:-none}"
   echo "ENDPOINT_LABEL=$ENDPOINT_LABEL"
   echo "READY_HTTP_CODE=$READY_HTTP_CODE"
   echo "CONTENT_TYPE=$CONTENT_TYPE"
@@ -126,10 +128,13 @@ summary.write_text("\n".join(out) + "\n", encoding="utf-8")
 summary.with_suffix(".okrate").write_text(str(ok_rate), encoding="utf-8")
 p95_val = q(0.95)
 summary.with_suffix(".p95").write_text("" if p95_val is None else str(p95_val), encoding="utf-8")
+p99_val = q(0.99)
+summary.with_suffix(".p99").write_text("" if p99_val is None else str(p99_val), encoding="utf-8")
 PY
 
 OK_RATE="$(cat "${SUMMARY%.txt}.okrate" 2>/dev/null || echo 0)"
 P95_VALUE="$(cat "${SUMMARY%.txt}.p95" 2>/dev/null || true)"
+P99_VALUE="$(cat "${SUMMARY%.txt}.p99" 2>/dev/null || true)"
 pass_or_fail="$(python3 - <<PY
 ok=float("$OK_RATE")
 thr=float("$OK_RATE_MIN")
@@ -137,6 +142,8 @@ print("PASS" if ok>=thr else "FAIL", "ok_rate=",f"{ok:.4f}","threshold=",f"{thr:
 pass_ok = ok>=thr
 p95_raw = """$P95_VALUE""".strip()
 p95_thr = """$P95_MAX_S""".strip()
+p99_raw = """$P99_VALUE""".strip()
+p99_thr = """$P99_MAX_S""".strip()
 if p95_thr:
     if not p95_raw:
         pass_ok = False
@@ -147,6 +154,16 @@ if p95_thr:
         ok95 = p95 <= thr95
         print("P95_CHECK=" + ("PASS" if ok95 else "FAIL"), "p95=", f"{p95:.3f}", "threshold=", f"{thr95:.3f}")
         pass_ok = pass_ok and ok95
+if p99_thr:
+    if not p99_raw:
+        pass_ok = False
+        print("P99_CHECK=FAIL missing_p99 threshold=", p99_thr)
+    else:
+        p99 = float(p99_raw)
+        thr99 = float(p99_thr)
+        ok99 = p99 <= thr99
+        print("P99_CHECK=" + ("PASS" if ok99 else "FAIL"), "p99=", f"{p99:.3f}", "threshold=", f"{thr99:.3f}")
+        pass_ok = pass_ok and ok99
 print("1" if pass_ok else "0")
 PY
 )"
