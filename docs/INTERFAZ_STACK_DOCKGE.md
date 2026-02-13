@@ -24,6 +24,19 @@ Dockge es una UI opcional para operar stacks Docker Compose en local.
 - `ui_open`: abre URL con `xdg-open` si existe; si no, solo imprime URL
 - `ui_down`: baja Dockge
 
+## Lucy UI Panel (funcional)
+
+Panel funcional para enviar requests al Gateway v1 y navegar inbox/outbox/deadletter:
+
+```bash
+./scripts/ui_panel_up.sh
+./scripts/verify_ui_panel.sh
+./scripts/ui_panel_down.sh
+```
+
+- URL: `http://127.0.0.1:5100`
+- Documentacion: `docs/LUCY_UI_PANEL.md`
+
 ## Levantar / apagar Dockge (bajo nivel)
 
 ```bash

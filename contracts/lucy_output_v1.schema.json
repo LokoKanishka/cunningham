@@ -1,11 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://lucy.local/contracts/lucy_output_v1.schema.json",
-  "title": "Lucy Output ACK v1",
+  "title": "Lucy Output Envelope v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["ok", "correlation_id", "received_ts", "status"],
+  "required": ["version", "ok", "correlation_id", "status", "response_ts"],
   "properties": {
+    "version": {
+      "type": "string",
+      "const": "lucy_output_v1"
+    },
     "ok": {
       "type": "boolean"
     },
@@ -14,23 +18,38 @@
       "minLength": 8,
       "maxLength": 128
     },
-    "received_ts": {
+    "status": {
+      "type": "string",
+      "enum": ["ok", "error", "pending"]
+    },
+    "response_ts": {
       "type": "string",
       "format": "date-time"
     },
-    "status": {
-      "type": "string",
-      "const": "accepted"
+    "result": {
+      "type": "object"
     },
-    "next": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 256
-    },
-    "reason": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 512
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message"],
+      "properties": {
+        "rc": {"type": "integer"},
+        "message": {"type": "string", "minLength": 1},
+        "stderr": {"type": "string"},
+        "stdout": {"type": "string"},
+        "stage": {"type": "string", "minLength": 1}
+      }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"ok": {"const": true}}},
+      "then": {"required": ["result"]}
+    },
+    {
+      "if": {"properties": {"ok": {"const": false}}},
+      "then": {"required": ["error"]}
+    }
+  ]
 }

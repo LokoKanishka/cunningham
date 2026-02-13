@@ -22,7 +22,8 @@
 ## Gateway Contract v1
 - Schemas:
   - `contracts/lucy_input_v1.schema.json`
-  - `contracts/lucy_output_v1.schema.json`
+  - `contracts/lucy_ack_v1.schema.json` (ACK webhook)
+  - `contracts/lucy_output_v1.schema.json` (outbox envelope)
 - Rules/examples:
   - `contracts/README.md`
 - Validate any JSON against schema:
@@ -38,6 +39,8 @@
 - End-to-end gateway check (ACK + IPC file):
   - `./scripts/n8n_gateway_e2e.sh`
   - Verifica `inbox` y compatibilidad `payloads` en runtime.
+- Outbox patch headless:
+  - `./scripts/n8n_patch_lucy_outbox_v1.sh`
 
 ## IPC envelope and layout
 - Envelope spec:
@@ -48,6 +51,8 @@
   - `/data/lucy_ipc/inbox`
   - `/data/lucy_ipc/outbox`
   - `/data/lucy_ipc/deadletter`
+  - outbox canonical naming: `/data/lucy_ipc/outbox/<correlation_id>.json`
+  - legacy compatibility: `/data/lucy_ipc/outbox/res_<correlation_id>.json`
   - compat runtime observed: `/data/lucy_ipc/payloads`
 - Quick watcher:
   - `./scripts/ipc_tail.sh ./ipc/inbox`
@@ -77,6 +82,11 @@
   - `_stress/metrics_snapshots/`
 - Optional Prometheus profile:
   - `docker compose --profile observability up -d prometheus`
+
+## UI panels (local-only)
+- Dockge stack operations: `http://127.0.0.1:5001`
+- Lucy Panel (functional gateway UI): `http://127.0.0.1:5100`
+- Lucy Panel docs: `docs/LUCY_UI_PANEL.md`
 
 ## Backup / Restore / DR
 - Backup (rotating, with checksums):

@@ -36,6 +36,8 @@ wait_http "searxng" "http://127.0.0.1:8080/"
 if [[ "$APPLY_GATEWAY_PATCH" == "true" ]]; then
   echo "[bringup] applying Lucy Gateway v1 patch"
   ./scripts/n8n_patch_lucy_gateway_v1.sh
+  echo "[bringup] applying Lucy Outbox v1 patch"
+  ./scripts/n8n_patch_lucy_outbox_v1.sh
   URL_MODE=hardcoded ANTIGRAVITY_TARGET_URL="http://127.0.0.1:5000/execute" ./scripts/n8n_set_antigravity_url.sh >/dev/null || true
   ./scripts/compose_infra.sh restart n8n >/dev/null
   wait_http "n8n-post-patch" "http://127.0.0.1:5678/healthz"

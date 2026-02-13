@@ -64,7 +64,9 @@ let ack = {
   correlation_id: correlationId,
   received_ts: receivedTs,
   status: 'accepted',
-  next: `ipc://inbox/${correlationId}.json`
+  next: `ipc://inbox/${correlationId}.json`,
+  outbox_path: `ipc://outbox/${correlationId}.json`,
+  outbox_contract: 'lucy_output_v1'
 };
 
 try {

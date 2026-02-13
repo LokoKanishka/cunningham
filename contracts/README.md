@@ -24,7 +24,7 @@ Example request:
 }
 ```
 
-## Response ACK: `lucy_output_v1.schema.json`
+## Response ACK: `lucy_ack_v1.schema.json`
 Required fields:
 - `ok`: processing admission result
 - `correlation_id`: canonical id for this event
@@ -48,3 +48,19 @@ Example response:
 
 Validation helper:
 - `python3 scripts/contract_validate.py contracts/lucy_input_v1.schema.json sample.json`
+
+## Outbox Envelope: `lucy_output_v1.schema.json`
+Required fields:
+- `version`: always `"lucy_output_v1"`
+- `ok`: execution result
+- `correlation_id`: canonical id for this event
+- `status`: `"ok" | "error" | "pending"`
+- `response_ts`: RFC3339 timestamp
+
+Optional fields:
+- `result`: object with successful output
+- `error`: structured error payload (`rc`, `message`, `stderr`, `stage`)
+
+Outbox naming:
+- source of truth: `ipc/outbox/<correlation_id>.json`
+- legacy compatibility (temporary): `ipc/outbox/res_<correlation_id>.json`

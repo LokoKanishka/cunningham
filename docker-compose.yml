@@ -140,7 +140,39 @@ services:
           cpus: "2.0"
           memory: 4G # Limite estricto para evitar congelamientos
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:5000/healthz || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/healthz', timeout=2)\" || exit 1",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  lucy_ui_panel:
+    build: ./apps/lucy_panel
+    image: lucy_ui_panel:local
+    container_name: lucy_ui_panel
+    restart: unless-stopped
+    depends_on:
+      n8n:
+        condition: service_healthy
+    network_mode: "host"
+    command: ["uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "5100"]
+    environment:
+      - GATEWAY_URL=http://127.0.0.1:5678/webhook/lucy-input
+      - IPC_ROOT=/data/lucy_ipc
+      - REPO_ROOT=/repo
+    volumes:
+      - ./ipc:/data/lucy_ipc:ro
+      - ./:/repo:rw
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5100/', timeout=2)\" || exit 1",
+        ]
       interval: 10s
       timeout: 3s
       retries: 12

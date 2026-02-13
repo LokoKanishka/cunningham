@@ -29,7 +29,7 @@ JSON
     continue
   fi
 
-  if ! python3 scripts/contract_validate.py contracts/lucy_output_v1.schema.json "$RES" >/dev/null; then
+  if ! python3 scripts/contract_validate.py contracts/lucy_ack_v1.schema.json "$RES" >/dev/null; then
     sleep 1
     continue
   fi

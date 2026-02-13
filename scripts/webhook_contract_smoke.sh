@@ -33,5 +33,5 @@ if [[ "$HTTP_CODE" != "200" ]]; then
   exit 1
 fi
 
-python3 scripts/contract_validate.py contracts/lucy_output_v1.schema.json "$RES"
+python3 scripts/contract_validate.py contracts/lucy_ack_v1.schema.json "$RES"
 echo "CONTRACT_SMOKE=PASS"
