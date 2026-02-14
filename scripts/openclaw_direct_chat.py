@@ -893,6 +893,12 @@ class Handler(BaseHTTPRequestHandler):
                 }
                 response_data = self._call_gateway(req_payload)
                 full = response_data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+                if not full.strip():
+                    full = (
+                        "No recibí texto del modelo en esta vuelta. "
+                        "Reformulá en un paso más concreto (por ejemplo: "
+                        "'buscá X en YouTube' o 'abrí Y')."
+                    )
                 step = 18
                 for i in range(0, len(full), step):
                     token = full[i:i + step]
@@ -912,6 +918,12 @@ class Handler(BaseHTTPRequestHandler):
             }
             response_data = self._call_gateway(req_payload)
             reply = response_data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            if not isinstance(reply, str) or not reply.strip():
+                reply = (
+                    "No recibí texto del modelo en esta vuelta. "
+                    "Reformulá en un paso más concreto (por ejemplo: "
+                    "'buscá X en YouTube' o 'abrí Y')."
+                )
 
             # Persist merged history server-side as fallback.
             merged = []
