@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -18,6 +19,7 @@ from urllib.request import Request, urlopen
 
 HISTORY_DIR = Path.home() / ".openclaw" / "direct_chat_histories"
 HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+PROFILE_CONFIG_PATH = Path.home() / ".openclaw" / "direct_chat_browser_profiles.json"
 
 SITE_ALIASES = {
     "chatgpt": "https://chatgpt.com/",
@@ -42,6 +44,13 @@ SITE_CANONICAL_TOKENS = {
     "youtube": ["youtube", "you tube"],
     "wikipedia": ["wikipedia", "wiki"],
     "gmail": ["gmail", "mail"],
+}
+
+# Defaults can be overridden in ~/.openclaw/direct_chat_browser_profiles.json
+DEFAULT_BROWSER_PROFILE_CONFIG = {
+    "_default": {"browser": "chrome", "profile": "diego"},
+    "chatgpt": {"browser": "chrome", "profile": "Chat"},
+    "youtube": {"browser": "chrome", "profile": "diego"},
 }
 
 
@@ -525,6 +534,109 @@ def _open_firefox_urls(urls: list[str]) -> tuple[list[str], str | None]:
     return opened, None
 
 
+def _load_browser_profile_config() -> dict:
+    config = dict(DEFAULT_BROWSER_PROFILE_CONFIG)
+    try:
+        if PROFILE_CONFIG_PATH.exists():
+            raw = json.loads(PROFILE_CONFIG_PATH.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                for k, v in raw.items():
+                    if isinstance(k, str) and isinstance(v, dict):
+                        config[k] = v
+    except Exception:
+        pass
+    return config
+
+
+def _chrome_command() -> str | None:
+    for cmd in ("google-chrome", "google-chrome-stable", "chromium-browser", "chromium"):
+        found = shutil.which(cmd)
+        if found:
+            return found
+    return None
+
+
+def _resolve_chrome_profile_directory(profile_hint: str) -> str:
+    hint = profile_hint.strip()
+    if not hint:
+        return hint
+
+    chrome_root = Path.home() / ".config" / "google-chrome"
+    local_state = chrome_root / "Local State"
+    try:
+        data = json.loads(local_state.read_text(encoding="utf-8"))
+        info = data.get("profile", {}).get("info_cache", {})
+        if isinstance(info, dict):
+            hint_norm = hint.lower().strip()
+            for key, value in info.items():
+                if not isinstance(key, str) or not isinstance(value, dict):
+                    continue
+                name = str(value.get("name", "")).lower().strip()
+                if name == hint_norm:
+                    return key
+    except Exception:
+        pass
+
+    if (chrome_root / hint).is_dir():
+        return hint
+
+    return hint
+
+
+def _open_url_with_site_context(url: str, site_key: str | None) -> str | None:
+    cfg = _load_browser_profile_config()
+    site_cfg = cfg.get(site_key or "", {})
+    if not site_cfg:
+        site_cfg = cfg.get("_default", {})
+    browser = str(site_cfg.get("browser", "")).lower().strip()
+    profile = _resolve_chrome_profile_directory(str(site_cfg.get("profile", "")).strip())
+
+    if browser == "chrome" and profile:
+        chrome = _chrome_command()
+        if not chrome:
+            return "No pude abrir Chrome: comando no encontrado en el sistema."
+        chrome_user_data = str(Path.home() / ".config" / "google-chrome")
+        try:
+            subprocess.Popen(
+                [
+                    chrome,
+                    f"--user-data-dir={chrome_user_data}",
+                    f"--profile-directory={profile}",
+                    "--new-window",
+                    url,
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return None
+        except Exception as e:
+            return f"No pude abrir Chrome perfil '{profile}': {e}"
+
+    try:
+        subprocess.Popen(
+            ["firefox", "--new-tab", url],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return None
+    except FileNotFoundError:
+        return "No pude abrir Firefox: comando no encontrado en el sistema."
+    except Exception as e:
+        return f"No pude abrir Firefox: {e}"
+
+
+def _open_site_urls(entries: list[tuple[str | None, str]]) -> tuple[list[str], str | None]:
+    opened = []
+    for site_key, url in entries:
+        error = _open_url_with_site_context(url, site_key)
+        if error:
+            return opened, error
+        opened.append(url)
+    return opened, None
+
+
 def _site_url(site_key: str) -> str:
     if site_key == "chatgpt":
         return SITE_ALIASES["chatgpt"]
@@ -586,7 +698,7 @@ def _maybe_handle_local_action(message: str, allowed_tools: set[str]) -> dict | 
         if "firefox" not in allowed_tools:
             return {"reply": "La herramienta local 'firefox' está deshabilitada en esta sesión."}
         url = _extract_url(message) or "about:blank"
-        opened, error = _open_firefox_urls([url])
+        opened, error = _open_site_urls([(None, url)])
         if error:
             return {"reply": error}
         return {"reply": f"Listo, abrí Firefox en: {opened[0]}"}
@@ -603,28 +715,28 @@ def _maybe_handle_local_action(message: str, allowed_tools: set[str]) -> dict | 
         site = m_site_search.group(2).strip()
         url = _build_site_search_url(site, query)
         if url:
-            opened, error = _open_firefox_urls([url])
+            opened, error = _open_site_urls([(site, url)])
             if error:
                 return {"reply": error}
             return {"reply": f"Listo, busqué '{query}' en {site} y abrí: {opened[0]}"}
 
     if "firefox" in allowed_tools and wants_new_chat and topic and ("chatgpt" in site_keys or "gemini" in site_keys):
-        urls = []
+        entries = []
         if "chatgpt" in site_keys:
-            urls.append(_site_url("chatgpt"))
+            entries.append(("chatgpt", _site_url("chatgpt")))
         if "gemini" in site_keys:
-            urls.append(_site_url("gemini"))
+            entries.append(("gemini", _site_url("gemini")))
         if "youtube" in site_keys:
             yt_url = _build_site_search_url("youtube", topic)
             if yt_url:
-                urls.append(yt_url)
+                entries.append(("youtube", yt_url))
         if "wikipedia" in site_keys:
             wiki_url = _build_site_search_url("wikipedia", topic)
             if wiki_url:
-                urls.append(wiki_url)
+                entries.append(("wikipedia", wiki_url))
 
-        if urls:
-            opened, error = _open_firefox_urls(urls)
+        if entries:
+            opened, error = _open_site_urls(entries)
             if error:
                 return {"reply": error}
             prompt = (
@@ -640,14 +752,14 @@ def _maybe_handle_local_action(message: str, allowed_tools: set[str]) -> dict | 
         if query in ("el tema", "ese tema", "este tema") and topic:
             query = topic
         url = _build_site_search_url("youtube", query)
-        opened, error = _open_firefox_urls([url]) if url else ([], "No pude construir la búsqueda en YouTube.")
+        opened, error = _open_site_urls([("youtube", url)]) if url else ([], "No pude construir la búsqueda en YouTube.")
         if error:
             return {"reply": error}
         return {"reply": f"Abrí videos de YouTube sobre '{query}': {opened[0]}"}
 
     if "firefox" in allowed_tools and site_keys and wants_open and not wants_search and not wants_new_chat:
-        urls = [_site_url(site_key) for site_key in site_keys]
-        opened, error = _open_firefox_urls(urls)
+        entries = [(site_key, _site_url(site_key)) for site_key in site_keys]
+        opened, error = _open_site_urls(entries)
         if error:
             return {"reply": error}
         listing = " | ".join(opened)
