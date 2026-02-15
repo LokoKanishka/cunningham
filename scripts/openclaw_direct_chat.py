@@ -50,7 +50,9 @@ SITE_CANONICAL_TOKENS = {
 # Defaults can be overridden in ~/.openclaw/direct_chat_browser_profiles.json
 DEFAULT_BROWSER_PROFILE_CONFIG = {
     "_default": {"browser": "chrome", "profile": "diego"},
-    "chatgpt": {"browser": "chrome", "profile": "Chat"},
+    # Keep ChatGPT/Gemini in the same logged-in Chrome profile by default.
+    "chatgpt": {"browser": "chrome", "profile": "diego"},
+    "gemini": {"browser": "chrome", "profile": "diego"},
     "youtube": {"browser": "chrome", "profile": "diego"},
 }
 WEB_ASK_SCRIPT_PATH = Path(__file__).with_name("web_ask_playwright.js")

@@ -1,4 +1,4 @@
-# Informe - Molbot Direct Chat (2026-02-14)
+# Informe - Molbot Direct Chat (actualizado 2026-02-14)
 
 ## Objetivo
 Tener una interfaz de chat local, simple y usable, conectada directo a OpenClaw (sin doble capa tipo OpenWebUI encima).
@@ -21,6 +21,7 @@ Servicio de usuario (fuera de repo):
 - Historial por sesión (persistido en `~/.openclaw/direct_chat_histories/`)
 - Herramientas locales activables por sesión:
   - `firefox`
+  - `web_ask` (experimental: automatiza UI web de ChatGPT/Gemini sin APIs pagas)
   - `desktop` (listar contenido real de escritorio)
   - `model`
 - Botones rápidos:
@@ -35,6 +36,39 @@ Servicio de usuario (fuera de repo):
   - MD
   - TXT
 - Adjuntos (texto, imagen y archivo, con resumen de contexto)
+
+## Capacidades nuevas (consolidación)
+### 1) Perfil de Chrome fijo por sitio (determinismo)
+- Config: `~/.openclaw/direct_chat_browser_profiles.json`
+- Default: `_default` usa perfil `diego` (resuelto contra `~/.config/google-chrome/Local State`).
+- Abrir sitios (ChatGPT/Gemini/YouTube/Wikipedia/Gmail) intenta respetar ese perfil para mantener sesión/cookies.
+
+### 2) ask_chatgpt_web / ask_gemini_web (sin API paga)
+Se agregó un carril experimental `web_ask` que permite:
+- `preguntale a chatgpt: ...`
+- `preguntale a gemini: ...`
+- `dialoga con chatgpt: ...` (2 turnos: prompt + follow-up)
+- `dialoga con gemini: ...` (2 turnos: prompt + follow-up)
+
+Notas:
+- Se ejecuta localmente con Playwright (Node) en `scripts/web_ask_playwright.js`.
+- Usa un **shadow profile** en `~/.openclaw/web_ask_shadow/` para evitar locks del perfil real.
+- Si falta login en shadow, responde `login_required` (fail-fast) con screenshot en `~/.openclaw/logs/web_ask_screens/`.
+- Bootstrap de login: `scripts/web_ask_bootstrap.sh [chatgpt|gemini] [profile_name]` o desde la UI: `login chatgpt` / `login gemini`.
+
+### 3) Escritorio: abrir/cerrar sin borrar nada
+Acciones locales seguras (sin delete/move):
+- `abrí <nombre> del escritorio`
+  - Solo abre items existentes dentro de `~/Escritorio` o `~/Desktop`
+  - Carpetas: usa `nautilus --new-window` (rastrea/permite cerrar)
+  - Archivos: usa `xdg-open`
+- `cerrá las ventanas que abriste del escritorio`
+  - Cierra solo ventanas registradas por la sesión (usa `wmctrl`)
+- `reset ventanas escritorio`
+  - Limpia el registro de ventanas para esa sesión
+
+### 4) No abrir en otro “escritorio virtual”
+Al abrir items del escritorio, si la ventana es detectable, se mueve al workspace activo usando `wmctrl`.
 
 ## Bugs corregidos en esta sesión
 1. `404` al abrir `/?v=2`
@@ -64,16 +98,6 @@ Servicio de usuario (fuera de repo):
 - `POST /api/chat/stream` OK
 - Flujo UI probado con automatización (Playwright CLI)
 
-## Limitación actual (esperada)
-`web_search` falla por falta de proveedor/config de búsqueda web:
-- No hay `BRAVE_API_KEY`
-- No hay `OPENROUTER_API_KEY`
-- No hay `PERPLEXITY_API_KEY`
-
-Sin esas claves, el modelo responde pero no puede ejecutar búsqueda web real.
-
-## Siguiente paso sugerido
-Si se quiere búsqueda web real desde el chat:
-1. Crear key de proveedor (Brave u otro)
-2. Configurarla en OpenClaw (`openclaw configure --section web` o env de gateway)
-3. Reiniciar gateway y validar tool `web_search`
+## Limitaciones actuales (esperadas)
+- `web_ask` depende de automatización de UI: puede romperse si cambia el DOM o aparece captcha/re-login.
+- Requiere que el shadow-profile esté logueado (una vez) para ChatGPT/Gemini.
