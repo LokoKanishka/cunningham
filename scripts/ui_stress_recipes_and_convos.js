@@ -14,6 +14,11 @@ const { chromium } = require("playwright");
 const BASE_URL = process.env.DIRECT_CHAT_URL || "http://127.0.0.1:8787/";
 const OUT_DIR = process.env.OUT_DIR || path.join(process.cwd(), "output", "playwright");
 const LOGIN_WAIT_MS = Number(process.env.LOGIN_WAIT_MS || "120000");
+const HEADED = String(process.env.HEADED || "").trim() === "1";
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 const RECIPES = [
   "preguntale a chatgpt: receta de budin de pistacho sin gluten para celiacos. dame ingredientes y pasos.",
@@ -91,7 +96,7 @@ async function ensureWebAskLoggedIn(page, provider) {
 
   // Give user time to log in manually.
   console.log(`WAITING ${Math.round(LOGIN_WAIT_MS / 1000)}s for manual login in shadow window for ${provider}...`);
-  await page.waitForTimeout(LOGIN_WAIT_MS);
+  await delay(LOGIN_WAIT_MS);
 
   // Retry probe
   reply = await sendAndWait(page, probe);
@@ -102,58 +107,59 @@ async function ensureWebAskLoggedIn(page, provider) {
 }
 
 async function main() {
-  const browser = await chromium.launch({ headless: false });
-  const page = await browser.newPage();
-
   const consoleErrors = [];
-  page.on("console", (msg) => {
-    if (msg.type() === "error") consoleErrors.push(msg.text());
-  });
+  const browser = await chromium.launch({ headless: !HEADED });
+  try {
+    const page = await browser.newPage();
+    page.on("console", (msg) => {
+      if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
 
-  await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
+    await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
 
-  // Deterministic: disable streaming so we wait for one assistant message.
-  await ensureCheckbox(page, "web_ask", true);
-  await ensureCheckbox(page, "streaming", false);
+    // Deterministic: disable streaming so we wait for one assistant message.
+    await ensureCheckbox(page, "web_ask", true);
+    await ensureCheckbox(page, "streaming", false);
 
-  await clickNewSession(page);
+    await clickNewSession(page);
 
-  // Ensure logins (may require user manual step).
-  await ensureWebAskLoggedIn(page, "chatgpt");
-  await ensureWebAskLoggedIn(page, "gemini");
+    // Ensure logins (may require user manual step).
+    await ensureWebAskLoggedIn(page, "chatgpt");
+    await ensureWebAskLoggedIn(page, "gemini");
 
-  console.log("RECIPES (10)");
-  for (let i = 0; i < RECIPES.length; i++) {
-    const q = RECIPES[i];
-    const r = await sendAndWait(page, q);
-    console.log(`  R${i + 1}:`, r.split("\n")[0].slice(0, 160));
-    if (isLoginRequired(r) || /^error:/i.test(r)) {
-      const shot = await screenshot(page, `ui_recipe_fail_${i + 1}.png`);
-      throw new Error(`Recipe ${i + 1} failed. Screenshot: ${shot}. Reply: ${r}`);
+    console.log("RECIPES (10)");
+    for (let i = 0; i < RECIPES.length; i++) {
+      const q = RECIPES[i];
+      const r = await sendAndWait(page, q);
+      console.log(`  R${i + 1}:`, r.split("\n")[0].slice(0, 160));
+      if (isLoginRequired(r) || /^error:/i.test(r)) {
+        const shot = await screenshot(page, `ui_recipe_fail_${i + 1}.png`);
+        throw new Error(`Recipe ${i + 1} failed. Screenshot: ${shot}. Reply: ${r}`);
+      }
     }
-  }
 
-  console.log("CONVERSATIONS (5) x >=3 turns");
-  for (let i = 0; i < CONVERSATIONS.length; i++) {
-    const c = CONVERSATIONS[i];
-    const q = `dialoga con ${c.who}: ${c.topic}`;
-    const r = await sendAndWait(page, q);
-    const first = r.split("\n")[0].slice(0, 160);
-    console.log(`  C${i + 1}:`, first);
-    if (!/Turno\s+3/i.test(r)) {
-      const shot = await screenshot(page, `ui_convo_fail_${i + 1}.png`);
-      throw new Error(`Conversation ${i + 1} did not reach 3 turns. Screenshot: ${shot}. Reply: ${r}`);
+    console.log("CONVERSATIONS (5) x >=3 turns");
+    for (let i = 0; i < CONVERSATIONS.length; i++) {
+      const c = CONVERSATIONS[i];
+      const q = `dialoga con ${c.who}: ${c.topic}`;
+      const r = await sendAndWait(page, q);
+      const first = r.split("\n")[0].slice(0, 160);
+      console.log(`  C${i + 1}:`, first);
+      if (!/Turno\s+3/i.test(r)) {
+        const shot = await screenshot(page, `ui_convo_fail_${i + 1}.png`);
+        throw new Error(`Conversation ${i + 1} did not reach 3 turns. Screenshot: ${shot}. Reply: ${r}`);
+      }
     }
-  }
 
-  if (consoleErrors.length) {
-    fs.mkdirSync(OUT_DIR, { recursive: true });
-    const logPath = path.join(OUT_DIR, "ui_recipes_convos_console_errors.log");
-    fs.writeFileSync(logPath, consoleErrors.join("\n"), "utf-8");
-    console.error(`Console had ${consoleErrors.length} error(s). Saved: ${logPath}`);
+    if (consoleErrors.length) {
+      fs.mkdirSync(OUT_DIR, { recursive: true });
+      const logPath = path.join(OUT_DIR, "ui_recipes_convos_console_errors.log");
+      fs.writeFileSync(logPath, consoleErrors.join("\n"), "utf-8");
+      console.error(`Console had ${consoleErrors.length} error(s). Saved: ${logPath}`);
+    }
+  } finally {
+    await browser.close();
   }
-
-  await browser.close();
 }
 
 main().catch((err) => {
