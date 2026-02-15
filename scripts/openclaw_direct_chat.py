@@ -57,6 +57,8 @@ WEB_ASK_SCRIPT_PATH = Path(__file__).with_name("web_ask_playwright.js")
 WEB_ASK_LOG_PATH = Path.home() / ".openclaw" / "logs" / "web_ask.log"
 WEB_ASK_LOCK_PATH = Path.home() / ".openclaw" / "web_ask_shadow" / ".web_ask.lock"
 WEB_ASK_THREAD_DIR = Path.home() / ".openclaw" / "web_ask_shadow" / "threads"
+OPENED_WINDOWS_PATH = Path.home() / ".openclaw" / "direct_chat_opened_windows.json"
+OPENED_WINDOWS_LOCK_PATH = Path.home() / ".openclaw" / ".direct_chat_opened_windows.lock"
 
 
 HTML = r"""<!doctype html>
@@ -496,6 +498,220 @@ def _normalize_text(value: str) -> str:
     lowered = value.lower()
     no_accents = "".join(c for c in unicodedata.normalize("NFKD", lowered) if not unicodedata.combining(c))
     return re.sub(r"\s+", " ", no_accents).strip()
+
+
+def _desktop_dir() -> Path | None:
+    home = Path.home()
+    candidates = [home / "Escritorio", home / "Desktop"]
+    return next((p for p in candidates if p.exists() and p.is_dir()), None)
+
+
+def _wmctrl_list() -> dict[str, str]:
+    """Return {win_id_hex: title} for current windows. Empty if wmctrl missing."""
+    if not shutil.which("wmctrl"):
+        return {}
+    try:
+        proc = subprocess.run(["wmctrl", "-l"], capture_output=True, text=True, timeout=3)
+    except Exception:
+        return {}
+    out: dict[str, str] = {}
+    for line in (proc.stdout or "").splitlines():
+        parts = line.split(None, 3)
+        if len(parts) < 4:
+            continue
+        win_id = parts[0].strip()
+        title = parts[3].strip()
+        if win_id and title:
+            out[win_id] = title
+    return out
+
+
+def _opened_windows_load() -> dict:
+    # Keep it lock-protected to avoid cross-thread corruption.
+    OPENED_WINDOWS_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with OPENED_WINDOWS_LOCK_PATH.open("a+", encoding="utf-8") as lockf:
+            fcntl.flock(lockf.fileno(), fcntl.LOCK_SH)
+            if OPENED_WINDOWS_PATH.exists():
+                try:
+                    data = json.loads(OPENED_WINDOWS_PATH.read_text(encoding="utf-8") or "{}")
+                    return data if isinstance(data, dict) else {}
+                except Exception:
+                    return {}
+            return {}
+    except Exception:
+        return {}
+
+
+def _opened_windows_save(data: dict) -> None:
+    try:
+        OPENED_WINDOWS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        OPENED_WINDOWS_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = OPENED_WINDOWS_PATH.with_suffix(".json.tmp")
+        payload = json.dumps(data, ensure_ascii=False, indent=2)
+        with OPENED_WINDOWS_LOCK_PATH.open("a+", encoding="utf-8") as lockf:
+            fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
+            tmp.write_text(payload, encoding="utf-8")
+            tmp.replace(OPENED_WINDOWS_PATH)
+    except Exception:
+        return
+
+
+def _record_opened_windows(session_id: str, items: list[dict]) -> None:
+    data = _opened_windows_load()
+    sess = data.get(session_id)
+    if not isinstance(sess, dict):
+        sess = {"items": []}
+    if not isinstance(sess.get("items"), list):
+        sess["items"] = []
+    # Keep a small, recent, de-duplicated set to avoid closing unrelated stale windows.
+    now = time.time()
+    keep: list[dict] = []
+    for it in sess["items"]:
+        if not isinstance(it, dict):
+            continue
+        ts = float(it.get("ts", 0) or 0)
+        if ts and (now - ts) < 30 * 60:
+            keep.append(it)
+    keep.extend(items)
+    seen = set()
+    deduped: list[dict] = []
+    for it in reversed(keep):
+        win_id = str(it.get("win_id", "")).strip()
+        path = str(it.get("path", "")).strip()
+        key = (win_id, path)
+        if not win_id or not path or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(it)
+    sess["items"] = list(reversed(deduped))[-24:]
+    data[session_id] = sess
+    _opened_windows_save(data)
+
+
+def _close_recorded_windows(session_id: str) -> tuple[int, list[str]]:
+    data = _opened_windows_load()
+    sess = data.get(session_id)
+    if not isinstance(sess, dict):
+        return 0, []
+    items = sess.get("items", [])
+    if not isinstance(items, list) or not items:
+        return 0, []
+    if not shutil.which("wmctrl"):
+        return 0, ["wmctrl_missing"]
+
+    closed = 0
+    errors: list[str] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        win_id = str(it.get("win_id", "")).strip()
+        if not win_id:
+            continue
+        try:
+            subprocess.run(["wmctrl", "-ic", win_id], timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            closed += 1
+        except Exception as e:
+            errors.append(str(e))
+
+    data.pop(session_id, None)
+    _opened_windows_save(data)
+    return closed, errors
+
+
+def _reset_recorded_windows(session_id: str) -> None:
+    data = _opened_windows_load()
+    if session_id in data:
+        data.pop(session_id, None)
+        _opened_windows_save(data)
+
+
+def _open_desktop_item(name_hint: str, session_id: str) -> dict:
+    desktop = _desktop_dir()
+    if desktop is None:
+        return {"ok": False, "error": "No encontré carpeta de escritorio en ~/Escritorio ni ~/Desktop."}
+    hint = _normalize_text(name_hint)
+    if not hint:
+        return {"ok": False, "error": "Decime qué carpeta/archivo del escritorio querés abrir."}
+
+    entries = sorted(desktop.iterdir(), key=lambda p: p.name.lower())
+    chosen: Path | None = None
+    for p in entries:
+        if hint == _normalize_text(p.name):
+            chosen = p
+            break
+    if chosen is None:
+        for p in entries:
+            if hint in _normalize_text(p.name):
+                chosen = p
+                break
+    if chosen is None:
+        for p in entries:
+            if _normalize_text(p.name).startswith(hint):
+                chosen = p
+                break
+    if chosen is None:
+        return {"ok": False, "error": f"No encontré '{name_hint}' en tu escritorio."}
+
+    if chosen.is_dir() and not shutil.which("nautilus") and not shutil.which("xdg-open"):
+        return {"ok": False, "error": "No encontré nautilus ni xdg-open (no puedo abrir carpetas)."}
+    if chosen.is_file() and not shutil.which("xdg-open"):
+        return {"ok": False, "error": "No encontré xdg-open en el sistema (no puedo abrir archivos)."}
+
+    before = _wmctrl_list()
+    try:
+        if chosen.is_dir() and shutil.which("nautilus"):
+            # Force a new window so we can track/close it deterministically.
+            subprocess.Popen(["nautilus", "--new-window", str(chosen)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        else:
+            subprocess.Popen(["xdg-open", str(chosen)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except Exception as e:
+        return {"ok": False, "error": f"No pude abrir '{chosen.name}': {e}"}
+
+    opened_items: list[dict] = []
+    # Verification heuristics:
+    # - Some apps reuse an existing window (no new wmctrl id). In that case we still
+    #   try to match window titles containing the file/folder name to confirm.
+    if before:
+        time.sleep(0.9)
+        after = _wmctrl_list()
+        new_ids = [wid for wid in after.keys() if wid not in before]
+
+        name_tokens = []
+        if chosen.is_file():
+            name_tokens.append(_normalize_text(chosen.stem))
+        name_tokens.append(_normalize_text(chosen.name))
+
+        def title_matches(t: str) -> bool:
+            tt = _normalize_text(t)
+            return any(tok and tok in tt for tok in name_tokens)
+
+        matched_ids = [wid for wid, title in after.items() if title and title_matches(title)]
+        record_ids = list(dict.fromkeys(matched_ids))[:6]
+        # If we forced a new nautilus window and didn't match the title, allow the single new window id.
+        if chosen.is_dir() and not record_ids and len(new_ids) == 1:
+            record_ids = [new_ids[0]]
+        for wid in record_ids:
+            opened_items.append(
+                {
+                    "id": str(uuid.uuid4()),
+                    "path": str(chosen),
+                    "name": chosen.name,
+                    "win_id": wid,
+                    "title": after.get(wid, ""),
+                    "ts": time.time(),
+                }
+            )
+        if opened_items:
+            _record_opened_windows(session_id, opened_items)
+
+    return {
+        "ok": True,
+        "name": chosen.name,
+        "path": str(chosen),
+        "kind": "carpeta" if chosen.is_dir() else "archivo",
+        "tracked_windows": len(opened_items),
+    }
 
 
 def _extract_topic(message: str) -> str | None:
@@ -1051,9 +1267,47 @@ def _save_history(session_id: str, history: list) -> None:
     p.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _maybe_handle_local_action(message: str, allowed_tools: set[str]) -> dict | None:
+def _maybe_handle_local_action(message: str, allowed_tools: set[str], session_id: str) -> dict | None:
     text = message.lower()
     normalized = _normalize_text(message)
+
+    # Safe local opens/closes for Desktop items (no deletion).
+    # Examples:
+    # - "abrí carpeta Lucy del escritorio"
+    # - "abrí Moscu del escritorio"
+    # - "cerrá las ventanas que abriste del escritorio"
+    if any(k in normalized for k in ("escritorio", "desktop")):
+        if any(k in normalized for k in ("reset", "reinic", "olvid", "limpia")) and any(k in normalized for k in ("ventan", "registro", "track")):
+            if "desktop" not in allowed_tools:
+                return {"reply": "La herramienta local 'desktop' está deshabilitada en esta sesión."}
+            _reset_recorded_windows(session_id=session_id)
+            return {"reply": "Listo: limpié el registro de ventanas abiertas por el sistema para esta sesión."}
+
+        if any(k in normalized for k in ("cerr", "close", "cierra")):
+            if "desktop" not in allowed_tools:
+                return {"reply": "La herramienta local 'desktop' está deshabilitada en esta sesión."}
+            closed, errors = _close_recorded_windows(session_id=session_id)
+            if errors:
+                return {"reply": f"Cerré {closed} ventana(s) que abrí. Errores: {', '.join(errors)[:260]}"}
+            return {"reply": f"Cerré {closed} ventana(s) que abrí (solo las registradas por el sistema)."}
+
+        m_open = re.search(
+            r"(?:abr[ií]|abrir|open)\s+(?:la\s+)?(?:carpeta|archivo|documento)?\s*([^\n\r]+?)\s+(?:del|en|de)\s+(?:mi\s+)?(?:escritorio|desktop)\b",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        if m_open:
+            if "desktop" not in allowed_tools:
+                return {"reply": "La herramienta local 'desktop' está deshabilitada en esta sesión."}
+            name = m_open.group(1).strip(" \"'").strip()
+            res = _open_desktop_item(name, session_id=session_id)
+            if not res.get("ok"):
+                return {"reply": str(res.get("error", "No pude abrir el item del escritorio."))}
+            tracked = int(res.get("tracked_windows", 0) or 0)
+            verify = " (verificado por ventana)" if tracked else " (no pude verificar ventana; lo abrí igualmente)"
+            return {
+                "reply": f"Listo: abrí {res.get('kind')} '{res.get('name')}'.{verify} Ruta: {res.get('path')}"
+            }
 
     # One-time helper: open a shadow-profile Chrome window so the user can login manually.
     # This avoids brittle automation failures like "login_required" for ChatGPT/Gemini.
@@ -1378,7 +1632,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(400, {"error": "Missing message"})
                 return
 
-            local_action = _maybe_handle_local_action(message, allowed_tools)
+            local_action = _maybe_handle_local_action(message, allowed_tools, session_id=session_id)
             if local_action is not None:
                 if self.path == "/api/chat/stream":
                     self.send_response(200)
