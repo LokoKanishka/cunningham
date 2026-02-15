@@ -526,6 +526,40 @@ def _wmctrl_list() -> dict[str, str]:
     return out
 
 
+def _wmctrl_current_desktop() -> int | None:
+    """Return the currently active workspace index, if available."""
+    if not shutil.which("wmctrl"):
+        return None
+    try:
+        proc = subprocess.run(["wmctrl", "-d"], capture_output=True, text=True, timeout=3)
+    except Exception:
+        return None
+    for line in (proc.stdout or "").splitlines():
+        # Example: "1  * DG: 1920x1080  VP: 0,0  WA: ..."
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "*":
+            try:
+                return int(parts[0])
+            except Exception:
+                return None
+    return None
+
+
+def _wmctrl_move_to_desktop(win_id: str, desktop_idx: int) -> bool:
+    if not shutil.which("wmctrl"):
+        return False
+    try:
+        subprocess.run(
+            ["wmctrl", "-i", "-r", win_id, "-t", str(desktop_idx)],
+            timeout=3,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except Exception:
+        return False
+
+
 def _opened_windows_load() -> dict:
     # Keep it lock-protected to avoid cross-thread corruption.
     OPENED_WINDOWS_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -659,6 +693,7 @@ def _open_desktop_item(name_hint: str, session_id: str) -> dict:
         return {"ok": False, "error": "No encontré xdg-open en el sistema (no puedo abrir archivos)."}
 
     before = _wmctrl_list()
+    target_desktop = _wmctrl_current_desktop()
     try:
         if chosen.is_dir() and shutil.which("nautilus"):
             # Force a new window so we can track/close it deterministically.
@@ -692,6 +727,8 @@ def _open_desktop_item(name_hint: str, session_id: str) -> dict:
         if chosen.is_dir() and not record_ids and len(new_ids) == 1:
             record_ids = [new_ids[0]]
         for wid in record_ids:
+            if target_desktop is not None:
+                _wmctrl_move_to_desktop(wid, target_desktop)
             opened_items.append(
                 {
                     "id": str(uuid.uuid4()),
