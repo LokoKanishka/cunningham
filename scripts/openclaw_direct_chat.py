@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import fcntl
+import html
 import json
 import os
 import re
@@ -110,19 +111,238 @@ def _wmctrl_current_desktop() -> int | None:
     return None
 
 
-def _wmctrl_move_to_desktop(win_id: str, desktop_idx: int) -> bool:
-    if not shutil.which("wmctrl"):
-        return False
+def _pid_cmd_args(pid_raw: str) -> list[str]:
     try:
-        subprocess.run(
-            ["wmctrl", "-i", "-r", win_id, "-t", str(desktop_idx)],
-            timeout=3,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        return True
+        pid = int(str(pid_raw).strip())
     except Exception:
-        return False
+        return []
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except Exception:
+        return []
+    return [p.decode("utf-8", errors="ignore").strip() for p in raw.split(b"\x00") if p]
+
+
+def _profile_directory_from_args(args: list[str]) -> str:
+    for i, arg in enumerate(args):
+        if arg.startswith("--profile-directory="):
+            return arg.split("=", 1)[1].strip().strip("'\"")
+        if arg == "--profile-directory" and (i + 1) < len(args):
+            return args[i + 1].strip().strip("'\"")
+    merged = " ".join(args)
+    m = re.search(r"--profile-directory=(.+?)(?:\s--|$)", merged)
+    if m:
+        return m.group(1).strip().strip("'\"")
+    m = re.search(r"--profile-directory\s+(.+?)(?:\s--|$)", merged)
+    if m:
+        return m.group(1).strip().strip("'\"")
+    return ""
+
+
+def _pid_profile_directory(pid_raw: str) -> str:
+    args = _pid_cmd_args(pid_raw)
+    if not args:
+        return ""
+    return _profile_directory_from_args(args)
+
+
+def _window_matches_profile(pid_raw: str, expected_profile: str | None) -> bool:
+    expected = str(expected_profile or "").strip().lower()
+    if not expected:
+        return True
+    got = _pid_profile_directory(pid_raw).strip().lower()
+    return bool(got) and got == expected
+
+
+def _xdotool_command(args: list[str], timeout: float = 3.0) -> tuple[int, str]:
+    if not shutil.which("xdotool"):
+        return 127, ""
+    try:
+        proc = subprocess.run(
+            ["xdotool", *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return proc.returncode, (proc.stdout or "").strip()
+    except Exception:
+        return 1, ""
+
+
+def _xdotool_window_geometry(win_id: str) -> tuple[int, int, int, int] | None:
+    rc, out = _xdotool_command(["getwindowgeometry", "--shell", win_id], timeout=2.0)
+    if rc != 0 or not out:
+        return None
+    vals: dict[str, int] = {}
+    for line in out.splitlines():
+        if "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k = k.strip().upper()
+        v = v.strip()
+        if k in ("X", "Y", "WIDTH", "HEIGHT"):
+            try:
+                vals[k] = int(v)
+            except Exception:
+                return None
+    if all(k in vals for k in ("X", "Y", "WIDTH", "HEIGHT")):
+        return vals["X"], vals["Y"], vals["WIDTH"], vals["HEIGHT"]
+    return None
+
+
+def _xdotool_active_window() -> str:
+    rc, out = _xdotool_command(["getactivewindow"], timeout=1.5)
+    if rc != 0 or not out:
+        return ""
+    wid = out.strip().lower()
+    if wid.startswith("0x"):
+        return wid
+    try:
+        return f"0x{int(wid):08x}"
+    except Exception:
+        return ""
+
+
+def _wmctrl_window_desktop(win_id: str) -> int | None:
+    if not shutil.which("wmctrl"):
+        return None
+    try:
+        proc = subprocess.run(["wmctrl", "-lp"], capture_output=True, text=True, timeout=3)
+        for line in (proc.stdout or "").splitlines():
+            parts = line.split(None, 4)
+            if len(parts) < 5:
+                continue
+            wid, desk_raw, _pid, _host, _title = parts
+            if wid.strip().lower() != win_id.strip().lower():
+                continue
+            try:
+                return int(desk_raw)
+            except Exception:
+                return None
+    except Exception:
+        return None
+    return None
+
+
+def _preferred_workspace_and_anchor(expected_profile: str | None = None) -> tuple[int | None, str]:
+    active = _xdotool_active_window()
+    if active:
+        wins = _wmctrl_list()
+        title = str(wins.get(active, "")).lower().strip()
+        if "molbot direct chat" in title:
+            desk = _wmctrl_window_desktop(active)
+            if desk is not None:
+                # Validate profile ownership when possible.
+                if expected_profile:
+                    for wid, pid_raw, _t in _wmctrl_windows_for_desktop(desk):
+                        if wid.lower() == active.lower() and _window_matches_profile(pid_raw, expected_profile):
+                            return desk, active
+                else:
+                    return desk, active
+
+    desk = _wmctrl_current_desktop()
+    if desk is None:
+        return None, ""
+    return desk, ""
+
+
+def _wmctrl_windows_for_desktop(desktop_idx: int) -> list[tuple[str, str, str]]:
+    if not shutil.which("wmctrl"):
+        return []
+    out: list[tuple[str, str, str]] = []
+    try:
+        proc = subprocess.run(["wmctrl", "-lp"], capture_output=True, text=True, timeout=3)
+        for line in (proc.stdout or "").splitlines():
+            parts = line.split(None, 4)
+            if len(parts) < 5:
+                continue
+            wid, desk_raw, pid_raw, _host, title = parts
+            try:
+                desk = int(desk_raw)
+            except Exception:
+                continue
+            if desk != desktop_idx:
+                continue
+            out.append((wid, pid_raw, title))
+    except Exception:
+        return []
+    return out
+
+
+def _open_gemini_in_current_workspace_via_ui(
+    expected_profile: str | None = None, session_id: str | None = None
+) -> tuple[bool, str]:
+    # Workspace-safe open path using visible UI interactions only.
+    workspace, preferred_anchor = _preferred_workspace_and_anchor(expected_profile)
+    if workspace is None:
+        return False, "workspace_not_detected"
+
+    wins = _wmctrl_windows_for_desktop(workspace)
+    before_ids = {wid for wid, _, _ in wins}
+    anchor = preferred_anchor or ""
+    if not anchor:
+        for wid, pid_raw, title in wins:
+            t = title.lower().strip()
+            if "molbot direct chat" in t and _window_matches_profile(pid_raw, expected_profile):
+                anchor = wid
+                break
+    if not anchor:
+        for wid, pid_raw, title in wins:
+            t = title.lower().strip()
+            if ("chrome" in t or "google" in t) and _window_matches_profile(pid_raw, expected_profile):
+                anchor = wid
+                break
+    if not anchor:
+        profile_txt = str(expected_profile or "any")
+        return False, f"no_anchor_window_in_current_workspace profile={profile_txt}"
+
+    _xdotool_command(["windowactivate", anchor], timeout=2.5)
+    time.sleep(0.22)
+    _xdotool_command(["key", "--window", anchor, "ctrl+n"], timeout=2.0)
+
+    target = ""
+    for _ in range(80):
+        now = _wmctrl_windows_for_desktop(workspace)
+        for wid, pid_raw, title in now:
+            if wid not in before_ids and ("chrome" in title.lower() or "google" in title.lower()):
+                if expected_profile and not _window_matches_profile(pid_raw, expected_profile):
+                    continue
+                target = wid
+                break
+        if target:
+            break
+        time.sleep(0.1)
+    if not target:
+        target = anchor
+
+    _xdotool_command(["windowactivate", target], timeout=2.5)
+    time.sleep(0.18)
+    for url in ("https://www.google.com/", "https://gemini.google.com/app"):
+        _xdotool_command(["key", "--window", target, "ctrl+l"], timeout=2.0)
+        time.sleep(0.08)
+        _xdotool_command(
+            ["type", "--delay", "18", "--clearmodifiers", "--window", target, url],
+            timeout=8.0,
+        )
+        time.sleep(0.08)
+        _xdotool_command(["key", "--window", target, "Return"], timeout=2.0)
+        time.sleep(0.9)
+
+    if session_id:
+        title = _wmctrl_list().get(target, "")
+        _record_browser_windows(
+            session_id,
+            [
+                {
+                    "win_id": target,
+                    "title": title,
+                    "url": "https://gemini.google.com/app",
+                    "site_key": "gemini",
+                    "ts": time.time(),
+                }
+            ],
+        )
+    return True, f"ui_open workspace={workspace} target={target}"
 
 
 def _wmctrl_close_window(win_id: str) -> bool:
@@ -140,10 +360,12 @@ def _wmctrl_close_window(win_id: str) -> bool:
         return False
 
 
-def _wmctrl_current_desktop_site_windows(site_key: str) -> list[tuple[str, str]]:
+def _wmctrl_current_desktop_site_windows(
+    site_key: str, expected_profile: str | None = None, desktop_idx: int | None = None
+) -> list[tuple[str, str]]:
     if not shutil.which("wmctrl"):
         return []
-    desk = _wmctrl_current_desktop()
+    desk = desktop_idx if desktop_idx is not None else _wmctrl_current_desktop()
     if desk is None:
         return []
     token = "gemini" if site_key == "gemini" else ("chatgpt" if site_key == "chatgpt" else site_key)
@@ -154,7 +376,7 @@ def _wmctrl_current_desktop_site_windows(site_key: str) -> list[tuple[str, str]]
             parts = line.split(None, 4)
             if len(parts) < 5:
                 continue
-            win_id, desktop_raw, _pid, _host, title = parts
+            win_id, desktop_raw, pid_raw, _host, title = parts
             try:
                 desktop_i = int(desktop_raw)
             except Exception:
@@ -165,6 +387,8 @@ def _wmctrl_current_desktop_site_windows(site_key: str) -> list[tuple[str, str]]
             if token not in title_n:
                 continue
             if "molbot direct chat" in title_n:
+                continue
+            if expected_profile and not _window_matches_profile(pid_raw, expected_profile):
                 continue
             out.append((win_id, title))
     except Exception:
@@ -181,6 +405,280 @@ def _close_recent_site_window_fallback(site_key: str) -> tuple[bool, str]:
     if _wmctrl_close_window(win_id):
         return True, title
     return False, "wmctrl_close_failed"
+
+
+def _extract_gemini_write_request(message: str) -> str | None:
+    msg = (message or "").strip()
+    normalized = _normalize_text(msg)
+    if not any(t in normalized for t in SITE_CANONICAL_TOKENS.get("gemini", [])):
+        return None
+    if not any(v in normalized for v in ("escrib", "deci", "decí", "pone", "poné", "manda", "envia", "enviá")):
+        return None
+
+    quoted = re.search(r"[\"“”'`]\s*([^\"“”'`]{1,320})\s*[\"“”'`]", msg)
+    if quoted:
+        text = quoted.group(1).strip()
+        if text:
+            return text[:320]
+
+    # Pick the LAST writing verb in the phrase, so requests like
+    # "decile a cunn que abra gemini y escriba hola gemini"
+    # extract only "hola gemini".
+    pat = re.compile(
+        r"(?:escrib[ií]|\bescribe\b|\bescriba\b|\bdec[ií]\b|\bdecime\b|\bdeci\b|pon[eé]|manda|envia|envi[aá])\s+(.+)",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    matches = list(pat.finditer(normalized))
+    if not matches:
+        return None
+    text = str(matches[-1].group(1) or "")
+    text = re.split(r"\s+y\s+(?:da\s+)?enter\b|\s+enter\b", text, maxsplit=1, flags=re.IGNORECASE)[0]
+    text = re.split(r"[\n\r]", text, maxsplit=1)[0]
+    text = re.sub(r"\ben\s+gemini\b", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bpor\s+favor\b", "", text, flags=re.IGNORECASE)
+    text = text.strip(" .,:;\"'`")
+    if not text:
+        return None
+    return text[:320]
+
+
+def _ocr_read_text(image_path: Path) -> str:
+    if not shutil.which("tesseract"):
+        return ""
+    try:
+        proc = subprocess.run(
+            ["tesseract", str(image_path), "stdout"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        return re.sub(r"\s+", " ", (proc.stdout or "").lower()).strip()
+    except Exception:
+        return ""
+
+
+def _ocr_contains_text(image_path: Path, expected: str) -> bool:
+    try:
+        txt = _ocr_read_text(image_path)
+        if not txt:
+            return False
+        exp = re.sub(r"\s+", " ", expected.lower().strip()).strip()
+        if not exp:
+            return False
+        # accept either full text or first token for short prompts
+        if exp in txt:
+            return True
+        # For multi-word prompts, require contiguous phrase match to avoid false positives
+        # from unrelated UI text (e.g., "Hola, diego" + "Gemini" in different places).
+        if len(exp.split()) >= 2:
+            return False
+        parts = [p for p in re.split(r"\W+", exp) if len(p) >= 3]
+        if not parts:
+            first = exp.split()[0] if exp.split() else exp
+            return len(first) >= 4 and first in txt
+        hits = sum(1 for p in parts if p in txt)
+        return hits >= max(1, len(parts) // 2)
+    except Exception:
+        return False
+
+
+def _ocr_contains_any(image_path: Path, expected_terms: list[str]) -> bool:
+    txt = _ocr_read_text(image_path)
+    if not txt:
+        return False
+    for term in expected_terms:
+        exp = re.sub(r"\s+", " ", term.lower().strip()).strip()
+        if exp and exp in txt:
+            return True
+    return False
+
+
+def _ocr_find_phrase_center(image_path: Path, phrases: list[str]) -> tuple[int, int] | None:
+    if not shutil.which("tesseract"):
+        return None
+    try:
+        proc = subprocess.run(
+            ["tesseract", str(image_path), "stdout", "hocr"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        raw = proc.stdout or ""
+    except Exception:
+        return None
+    if not raw.strip():
+        return None
+
+    words: list[tuple[str, tuple[int, int, int, int]]] = []
+    for m in re.finditer(
+        r"<span[^>]*class=[\"']ocrx_word[\"'][^>]*title=[\"']([^\"']+)[\"'][^>]*>(.*?)</span>",
+        raw,
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        title = m.group(1) or ""
+        body = re.sub(r"<[^>]+>", "", m.group(2) or "")
+        body = html.unescape(body).strip()
+        if not body:
+            continue
+        bb = re.search(r"bbox\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)", title)
+        if not bb:
+            continue
+        try:
+            x1, y1, x2, y2 = [int(bb.group(i)) for i in range(1, 5)]
+        except Exception:
+            continue
+        norm_word = re.sub(r"[^\wáéíóúüñ]+", "", _normalize_text(body))
+        if not norm_word:
+            continue
+        words.append((norm_word, (x1, y1, x2, y2)))
+    if not words:
+        return None
+
+    tokens = [w for w, _ in words]
+    for phrase in phrases:
+        pnorm = _normalize_text(phrase)
+        wanted = [re.sub(r"[^\wáéíóúüñ]+", "", t) for t in pnorm.split()]
+        wanted = [t for t in wanted if t]
+        if not wanted:
+            continue
+        n = len(wanted)
+        for i in range(0, len(tokens) - n + 1):
+            if tokens[i : i + n] != wanted:
+                continue
+            xs = []
+            ys = []
+            for _w, (x1, y1, x2, y2) in words[i : i + n]:
+                xs.extend([x1, x2])
+                ys.extend([y1, y2])
+            if not xs or not ys:
+                continue
+            cx = (min(xs) + max(xs)) // 2
+            cy = (min(ys) + max(ys)) // 2
+            return cx, cy
+    return None
+
+
+def _gemini_write_in_current_workspace(text: str, session_id: str | None = None) -> tuple[bool, str]:
+    if not shutil.which("wmctrl") or not shutil.which("xdotool"):
+        return False, "missing_wmctrl_or_xdotool"
+
+    workspace, _anchor = _preferred_workspace_and_anchor()
+    if workspace is None:
+        return False, "workspace_not_detected"
+
+    expected_profile = _expected_profile_directory_for_site("gemini")
+
+    # Reuse Gemini in the current workspace when available.
+    opened: list[str]
+    existing = _wmctrl_current_desktop_site_windows(
+        "gemini", expected_profile=expected_profile, desktop_idx=workspace
+    )
+    if existing:
+        opened = ["reuse_existing_gemini_window"]
+    else:
+        ok_open, detail = _open_gemini_in_current_workspace_via_ui(
+            expected_profile=expected_profile, session_id=session_id
+        )
+        if not ok_open:
+            return False, detail
+        opened = [detail]
+
+    win_id = ""
+    for _ in range(140):
+        wins = _wmctrl_current_desktop_site_windows(
+            "gemini", expected_profile=expected_profile, desktop_idx=workspace
+        )
+        if wins:
+            win_id = wins[-1][0]
+            break
+        time.sleep(0.12)
+    if not win_id:
+        return False, f"gemini_window_not_found_current_workspace profile={expected_profile}"
+
+    _xdotool_command(["windowactivate", win_id], timeout=2.5)
+    time.sleep(0.65)
+    geom = _xdotool_window_geometry(win_id)
+    if not geom:
+        return False, "gemini_geometry_not_found"
+    gx, gy, gw, gh = geom
+
+    screen_dir = Path.home() / ".openclaw" / "logs" / "gemini_write_screens"
+    screen_dir.mkdir(parents=True, exist_ok=True)
+    import_bin = shutil.which("import")
+    if not import_bin:
+        return False, "missing_import_for_visual_verification"
+
+    snap_state = screen_dir / f"gemini_write_state_{int(time.time() * 1000)}.png"
+    try:
+        subprocess.run(
+            [import_bin, "-window", win_id, str(snap_state)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=4,
+        )
+    except Exception:
+        return False, "state_screenshot_failed"
+
+    if _ocr_contains_any(snap_state, ["iniciar sesión", "iniciar sesion", "sign in"]):
+        return False, f"login_required workspace={workspace} win={win_id} snap={snap_state}"
+
+    composer_center = _ocr_find_phrase_center(
+        snap_state,
+        [
+            "preguntale a gemini",
+            "pregúntale a gemini",
+            "pregunta a gemini",
+            "pregunta a gemini 3",
+            "que quieres investigar",
+            "¿qué quieres investigar?",
+            "ask gemini",
+        ],
+    )
+    if not composer_center:
+        return False, f"composer_not_found workspace={workspace} win={win_id} snap={snap_state}"
+
+    rel_x, rel_y = composer_center
+    px = gx + rel_x
+    py = gy + rel_y
+    _xdotool_command(["mousemove", str(px), str(py)], timeout=2.0)
+    _xdotool_command(["click", "1"], timeout=2.0)
+    time.sleep(0.14)
+    _xdotool_command(["type", "--delay", "34", "--clearmodifiers", "--window", win_id, text], timeout=8.0)
+    time.sleep(0.25)
+
+    snap_pre = screen_dir / f"gemini_write_pre_{int(time.time() * 1000)}.png"
+    try:
+        subprocess.run(
+            [import_bin, "-window", win_id, str(snap_pre)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=4,
+        )
+    except Exception:
+        return False, f"pre_screenshot_failed workspace={workspace} win={win_id}"
+
+    if not _ocr_contains_text(snap_pre, text):
+        return False, f"typed_but_unverified workspace={workspace} win={win_id} snap={snap_pre}"
+
+    _xdotool_command(["key", "--window", win_id, "Return"], timeout=2.0)
+    time.sleep(0.8)
+    snap_post = screen_dir / f"gemini_write_post_{int(time.time() * 1000)}.png"
+    try:
+        subprocess.run(
+            [import_bin, "-window", win_id, str(snap_post)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=4,
+        )
+        return True, (
+            f"verified workspace={workspace} win={win_id} click={px},{py} "
+            f"snap_pre={snap_pre} snap_post={snap_post} opened={' | '.join(opened)}"
+        )
+    except Exception:
+        return True, (
+            f"verified workspace={workspace} win={win_id} click={px},{py} "
+            f"snap_pre={snap_pre} opened={' | '.join(opened)}"
+        )
 
 
 def _browser_windows_load() -> dict:
@@ -421,6 +919,15 @@ def _load_browser_profile_config() -> dict:
     return config
 
 
+def _expected_profile_directory_for_site(site_key: str | None) -> str:
+    cfg = _load_browser_profile_config()
+    site_cfg = cfg.get(site_key or "", {})
+    if not site_cfg:
+        site_cfg = cfg.get("_default", {})
+    hint = str(site_cfg.get("profile", "")).strip()
+    return _resolve_chrome_profile_directory(hint)
+
+
 def _chrome_command() -> str | None:
     for cmd in ("google-chrome", "google-chrome-stable", "chromium-browser", "chromium"):
         found = shutil.which(cmd)
@@ -474,7 +981,7 @@ def _open_url_with_site_context(url: str, site_key: str | None, session_id: str 
     if not site_cfg:
         site_cfg = cfg.get("_default", {})
     browser = str(site_cfg.get("browser", "")).lower().strip()
-    profile = _resolve_chrome_profile_directory(str(site_cfg.get("profile", "")).strip())
+    profile = _expected_profile_directory_for_site(site_key)
 
     if browser == "chrome" and profile:
         chrome = _chrome_command()
@@ -482,7 +989,6 @@ def _open_url_with_site_context(url: str, site_key: str | None, session_id: str 
             return "No pude abrir Chrome: comando no encontrado en el sistema."
         chrome_user_data = str(Path.home() / ".config" / "google-chrome")
         before = _wmctrl_list()
-        target_desktop = _wmctrl_current_desktop()
         try:
             subprocess.Popen(
                 [
@@ -507,9 +1013,6 @@ def _open_url_with_site_context(url: str, site_key: str | None, session_id: str 
                 if new_ids:
                     break
 
-            if new_ids and (target_desktop is not None):
-                for wid in new_ids:
-                    _wmctrl_move_to_desktop(wid, target_desktop)
             if session_id and new_ids:
                 _record_browser_windows(
                     session_id,
@@ -539,6 +1042,12 @@ def _open_url_with_site_context(url: str, site_key: str | None, session_id: str 
 def _open_site_urls(entries: list[tuple[str | None, str]], session_id: str | None = None) -> tuple[list[str], str | None]:
     opened = []
     for site_key, url in entries:
+        if site_key == "gemini":
+            gem_opened, gem_error = _open_gemini_client_flow(session_id=session_id)
+            if gem_error:
+                return opened, gem_error
+            opened.extend(gem_opened)
+            continue
         error = _open_url_with_site_context(url, site_key, session_id=session_id)
         if error:
             return opened, error
@@ -547,14 +1056,23 @@ def _open_site_urls(entries: list[tuple[str | None, str]], session_id: str | Non
 
 
 def _open_gemini_client_flow(session_id: str | None = None) -> tuple[list[str], str | None]:
-    # Deterministic "human-like" flow requested by user:
-    # 1) open Google in the Gemini-configured client/profile
-    # 2) open Gemini from that same client/profile
-    entries = [
-        ("gemini", "https://www.google.com/"),
-        ("gemini", _site_url("gemini")),
-    ]
-    return _open_site_urls(entries, session_id=session_id)
+    # Deterministic + workspace-safe "human-like" flow:
+    # 1) from a Chrome window in the current workspace with expected profile
+    # 2) open new window, then Google -> Gemini in that same client/profile
+    expected_profile = _expected_profile_directory_for_site("gemini")
+    ok, detail = _open_gemini_in_current_workspace_via_ui(
+        expected_profile=expected_profile, session_id=session_id
+    )
+    if not ok:
+        return (
+            [],
+            (
+                "No pude abrir Gemini en el cliente configurado dentro de este workspace. "
+                f"({detail}) "
+                "Dejá visible una ventana de Chrome del perfil diego (Profile 1), por ejemplo Molbot Direct Chat, y repetí."
+            ),
+        )
+    return ["https://www.google.com/", _site_url("gemini")], None
 
 
 def _site_url(site_key: str) -> str:
@@ -701,6 +1219,15 @@ def _maybe_handle_local_action(message: str, allowed_tools: set[str], session_id
             )
         }
 
+    gemini_write_text = _extract_gemini_write_request(message)
+    if gemini_write_text:
+        if ("web_ask" not in allowed_tools) and ("firefox" not in allowed_tools):
+            return {"reply": "La herramienta local 'gemini write' está deshabilitada en esta sesión."}
+        ok, detail = _gemini_write_in_current_workspace(gemini_write_text, session_id=session_id)
+        if ok:
+            return {"reply": f"Listo: escribí en Gemini \"{gemini_write_text}\" y di Enter. ({detail})"}
+        return {"reply": f"No pude escribir en Gemini automáticamente (no verificado). ({detail})"}
+
     web_req = web_ask.extract_web_ask_request(message)
     if web_req is not None:
         # web_ask is separate from opening URLs via firefox. Keep backward-compat:
@@ -708,6 +1235,24 @@ def _maybe_handle_local_action(message: str, allowed_tools: set[str], session_id
         if ("web_ask" not in allowed_tools) and ("firefox" not in allowed_tools):
             return {"reply": "La herramienta local 'web_ask' está deshabilitada en esta sesión."}
         site_key, prompt, followups = web_req
+
+        # Hard policy requested by user:
+        # Any Gemini interaction must always start through the trained stable route
+        # (Google -> Gemini in configured client/profile), not via shadow web_ask login flow.
+        if site_key == "gemini":
+            opened, error = _open_gemini_client_flow(session_id=session_id)
+            if error:
+                return {"reply": error}
+            lines = [
+                "Abrí Gemini con el flujo entrenado en el cliente correcto (Google -> Gemini).",
+                f"Prompt para pegar en Gemini: \"{prompt}\"",
+            ]
+            if isinstance(followups, list) and followups:
+                lines.append("Seguimiento sugerido (opcional):")
+                for i, fup in enumerate(followups[:4], 1):
+                    lines.append(f"{i}. {fup}")
+            return {"reply": "\n".join(lines)}
+
         result = web_ask.run_web_ask(site_key, prompt, timeout_ms=60000, followups=followups)
         reply = web_ask.format_web_ask_reply(site_key, prompt, result)
         if str(result.get("status", "")).strip() in ("login_required", "captcha_required"):
@@ -741,7 +1286,7 @@ def _maybe_handle_local_action(message: str, allowed_tools: set[str], session_id
         opened, error = _open_gemini_client_flow(session_id=session_id)
         if error:
             return {"reply": error}
-        return {"reply": f"Abrí Gemini en el cliente configurado con flujo fijo: {' | '.join(opened)}"}
+        return {"reply": "Abrí Gemini en el cliente correcto con el flujo entrenado (Google -> Gemini)."}
 
     m_site_search = re.search(r"(?:busca|buscar|search)\s+(.+?)\s+en\s+(youtube|wikipedia)", normalized, flags=re.IGNORECASE)
     if "firefox" in allowed_tools and m_site_search:

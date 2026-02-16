@@ -7,6 +7,8 @@ Estas reglas aplican siempre para Cunningham en Ubuntu:
 3. Para pruebas, abrir siempre ventana nueva en el workspace activo.
 4. Si no se puede garantizar aislamiento por workspace, detenerse y pedir confirmación.
 5. Se puede usar el perfil Chrome solicitado (por ejemplo `diego`) pero solo abriendo ventana nueva en el workspace activo.
+6. Prohibido usar comandos/acciones que cambien de workspace una ventana (por ejemplo `wmctrl -t` o equivalente).
+7. Si una ventana se abrió por error en otro workspace, no moverla: dejarla donde está y continuar solo en el workspace actual.
 
 ## Modo "como humano en el chat" (permanente)
 

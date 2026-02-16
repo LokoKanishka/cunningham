@@ -7,6 +7,8 @@ These rules are mandatory for any browser/UI automation in this repository.
 3. Only open new windows for tests in the current active workspace.
 4. If the action cannot guarantee workspace isolation, stop and ask before continuing.
 5. Use the requested Chrome profile (for example `diego`) only by opening a new window/tab in the current workspace, without touching other workspace windows.
+6. Forbidden: any command/action that changes a window's workspace (for example `wmctrl -t`, workspace move helpers, or equivalent).
+7. If a window was opened in another workspace by mistake, never move it; leave it there and continue only in the current workspace.
 
 # Human Chat Mode (Permanent)
 

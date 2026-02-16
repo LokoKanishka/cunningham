@@ -102,7 +102,7 @@ fi
   --class=web_ask_shadow \
   "$URL" >/dev/null 2>&1 &
 
-if command -v wmctrl >/dev/null 2>&1 && [[ -n "$target_desktop" ]]; then
+if [[ "${WEB_ASK_ALLOW_WORKSPACE_MOVE:-0}" == "1" ]] && command -v wmctrl >/dev/null 2>&1 && [[ -n "$target_desktop" ]]; then
   # Prefer moving windows belonging to the shadow profile process(es).
   for _ in {1..80}; do
     sleep 0.1
