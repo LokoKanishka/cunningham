@@ -224,6 +224,20 @@ def _wmctrl_window_desktop(win_id: str) -> int | None:
     return None
 
 
+def _wait_window_title_contains(win_id: str, terms: list[str], timeout_s: float = 8.0) -> tuple[bool, str]:
+    deadline = time.time() + max(0.5, timeout_s)
+    last = ""
+    needles = [str(t).lower().strip() for t in terms if str(t).strip()]
+    while time.time() < deadline:
+        title = str(_wmctrl_list().get(win_id, "")).lower().strip()
+        if title:
+            last = title
+        if title and any(n in title for n in needles):
+            return True, title
+        time.sleep(0.2)
+    return False, last
+
+
 def _wmctrl_move_window_to_desktop(win_id: str, desktop_idx: int) -> bool:
     if not shutil.which("wmctrl"):
         return False
@@ -237,6 +251,25 @@ def _wmctrl_move_window_to_desktop(win_id: str, desktop_idx: int) -> bool:
         return True
     except Exception:
         return False
+
+
+def _find_new_profiled_chrome_window(
+    before_ids: set[str], expected_profile: str | None, max_desktops: int = 16, timeout_s: float = 10.0
+) -> tuple[str, int | None]:
+    deadline = time.time() + max(0.8, timeout_s)
+    while time.time() < deadline:
+        for desk_idx in range(max_desktops):
+            for wid, pid_raw, title in _wmctrl_windows_for_desktop(desk_idx):
+                if wid in before_ids:
+                    continue
+                t = str(title).lower()
+                if not any(tok in t for tok in ("chrome", "google", "gemini", "about:blank")):
+                    continue
+                if expected_profile and not _window_matches_profile(pid_raw, expected_profile):
+                    continue
+                return wid, desk_idx
+        time.sleep(0.12)
+    return "", None
 
 
 def _preferred_workspace_and_anchor(expected_profile: str | None = None) -> tuple[int | None, str]:
@@ -393,6 +426,7 @@ def _open_gemini_in_current_workspace_via_ui(
 
     _xdotool_command(["windowactivate", target], timeout=2.5)
     time.sleep(0.18)
+    # Keep trained flow (Google -> Gemini), but verify Gemini actually loaded.
     for url in ("https://www.google.com/", "https://gemini.google.com/app"):
         _xdotool_command(["key", "--window", target, "ctrl+l"], timeout=2.0)
         time.sleep(0.08)
@@ -402,7 +436,45 @@ def _open_gemini_in_current_workspace_via_ui(
         )
         time.sleep(0.08)
         _xdotool_command(["key", "--window", target, "Return"], timeout=2.0)
-        time.sleep(0.9)
+        time.sleep(0.6)
+        if "google.com" in url:
+            _wait_window_title_contains(target, ["google"], timeout_s=4.0)
+        if "gemini.google.com" in url:
+            ok_title, _t = _wait_window_title_contains(target, ["gemini"], timeout_s=6.0)
+            if not ok_title:
+                # Hard fallback: open Gemini directly with expected profile, then force same workspace.
+                chrome = _chrome_command()
+                if not chrome:
+                    return False, "gemini_not_loaded_and_chrome_not_found"
+                before_spawn = set(_wmctrl_list().keys())
+                chrome_user_data = str(Path.home() / ".config" / "google-chrome")
+                try:
+                    subprocess.Popen(
+                        [
+                            chrome,
+                            f"--user-data-dir={chrome_user_data}",
+                            f"--profile-directory={expected_profile or 'Default'}",
+                            "--new-window",
+                            "https://gemini.google.com/app",
+                        ],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                except Exception:
+                    cur_title = str(_wmctrl_list().get(target, ""))
+                    return False, f"gemini_not_loaded title={cur_title}"
+                spawned, spawned_desk = _find_new_profiled_chrome_window(before_spawn, expected_profile)
+                if not spawned:
+                    cur_title = str(_wmctrl_list().get(target, ""))
+                    return False, f"gemini_not_loaded title={cur_title}"
+                if spawned_desk is None or spawned_desk != workspace:
+                    _wmctrl_move_window_to_desktop(spawned, workspace)
+                _xdotool_command(["windowactivate", spawned], timeout=2.5)
+                target = spawned
+                ok_title2, final_title = _wait_window_title_contains(target, ["gemini"], timeout_s=8.0)
+                if not ok_title2:
+                    return False, f"gemini_not_loaded title={final_title}"
 
     needs_login, snap = _gemini_window_requires_login(target)
     if needs_login:
@@ -563,6 +635,34 @@ def _extract_gemini_write_request(message: str) -> str | None:
     if not text:
         return None
     return text[:320]
+
+
+def _extract_gemini_ask_request(message: str) -> str | None:
+    normalized = _normalize_text(message or "")
+    if not any(t in normalized for t in SITE_CANONICAL_TOKENS.get("gemini", [])):
+        return None
+    if not any(v in normalized for v in ("pregunt", "consult", "pedi", "pedile", "decile", "dile")):
+        return None
+
+    m = re.search(
+        r"(?:pregunt\w*|consult\w*|ped\w*|dec\w*|dile)\s+(?:a\s+)?gemini\b[\s,:-]*(.+)$",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if not m:
+        m = re.search(
+            r"\bgemini\b.*?(?:pregunt\w*|consult\w*|ped\w*|dec\w*|dile)\b[\s,:-]*(.+)$",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+    if not m:
+        return None
+    prompt = (m.group(1) or "").strip()
+    prompt = re.sub(r"^(que|sobre|acerca de)\s+", "", prompt, flags=re.IGNORECASE).strip()
+    prompt = prompt.strip(" .,:;\"'`")
+    if not prompt:
+        return None
+    return prompt[:320]
 
 
 def _ocr_read_text(image_path: Path) -> str:
@@ -830,7 +930,9 @@ def _gemini_write_in_current_workspace(text: str, session_id: str | None = None)
             # Click a bit above that footer to focus the text input area.
             composer_center = (tx, max(12, ty - int(gh * 0.055)))
     if not composer_center:
-        return False, f"composer_not_found workspace={workspace} win={win_id} snap={snap_state}"
+        # OCR can miss dark-theme placeholders; use geometric fallback over the
+        # central lower panel where Gemini composer usually lives.
+        composer_center = (int(gw * 0.62), int(gh * 0.56))
 
     rel_x, rel_y = composer_center
     px = gx + rel_x
@@ -1504,6 +1606,18 @@ def _maybe_handle_local_action(message: str, allowed_tools: set[str], session_id
             )
         }
 
+    gemini_ask_text = _extract_gemini_ask_request(message)
+    if gemini_ask_text:
+        if ("web_ask" not in allowed_tools) and ("firefox" not in allowed_tools):
+            return {"reply": "La herramienta local 'gemini write' está deshabilitada en esta sesión."}
+        _opened, error = _open_gemini_client_flow(session_id=session_id)
+        if error:
+            return {"reply": error}
+        ok, detail = _gemini_write_in_current_workspace(gemini_ask_text, session_id=session_id)
+        if ok:
+            return {"reply": f"Listo: en Gemini envié \"{gemini_ask_text}\". ({detail})"}
+        return {"reply": f"Abrí Gemini, pero no pude enviar el prompt automáticamente. ({detail})"}
+
     gemini_write_text = _extract_gemini_write_request(message)
     if gemini_write_text:
         if ("web_ask" not in allowed_tools) and ("firefox" not in allowed_tools):
@@ -1525,18 +1639,18 @@ def _maybe_handle_local_action(message: str, allowed_tools: set[str], session_id
         # Any Gemini interaction must always start through the trained stable route
         # (Google -> Gemini in configured client/profile), not via shadow web_ask login flow.
         if site_key == "gemini":
-            opened, error = _open_gemini_client_flow(session_id=session_id)
+            _opened, error = _open_gemini_client_flow(session_id=session_id)
             if error:
                 return {"reply": error}
-            lines = [
-                "Abrí Gemini con el flujo entrenado en el cliente correcto (Google -> Gemini).",
-                f"Prompt para pegar en Gemini: \"{prompt}\"",
-            ]
-            if isinstance(followups, list) and followups:
-                lines.append("Seguimiento sugerido (opcional):")
-                for i, fup in enumerate(followups[:4], 1):
-                    lines.append(f"{i}. {fup}")
-            return {"reply": "\n".join(lines)}
+            ok_write, detail = _gemini_write_in_current_workspace(prompt, session_id=session_id)
+            if ok_write:
+                lines = [f"Listo: en Gemini envié \"{prompt}\". ({detail})"]
+                if isinstance(followups, list) and followups:
+                    lines.append("Seguimientos sugeridos:")
+                    for i, fup in enumerate(followups[:4], 1):
+                        lines.append(f"{i}. {fup}")
+                return {"reply": "\n".join(lines)}
+            return {"reply": f"Abrí Gemini con el flujo entrenado, pero no pude enviar el prompt automáticamente. ({detail})"}
 
         result = web_ask.run_web_ask(site_key, prompt, timeout_ms=60000, followups=followups)
         reply = web_ask.format_web_ask_reply(site_key, prompt, result)

@@ -36,6 +36,16 @@ class TestGeminiWriteParser(unittest.TestCase):
         out = direct_chat._extract_gemini_write_request(msg)
         self.assertEqual(out, "hola gemini")
 
+    def test_extract_gemini_ask_direct(self) -> None:
+        msg = "podrias preguntarle a gemini que es un proton"
+        out = direct_chat._extract_gemini_ask_request(msg)
+        self.assertEqual(out, "es un proton")
+
+    def test_extract_gemini_ask_after_open(self) -> None:
+        msg = "hola, abri gemini y preguntale la receta de los biñuelitos de manzana"
+        out = direct_chat._extract_gemini_ask_request(msg)
+        self.assertEqual(out, "la receta de los binuelitos de manzana")
+
 
 if __name__ == "__main__":
     unittest.main()
