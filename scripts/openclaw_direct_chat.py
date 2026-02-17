@@ -412,7 +412,28 @@ def _extract_gemini_write_request(message: str) -> str | None:
     normalized = _normalize_text(msg)
     if not any(t in normalized for t in SITE_CANONICAL_TOKENS.get("gemini", [])):
         return None
-    if not any(v in normalized for v in ("escrib", "deci", "decí", "pone", "poné", "manda", "envia", "enviá")):
+    if not any(
+        v in normalized
+        for v in (
+            "escrib",
+            "deci",
+            "decí",
+            "pone",
+            "poné",
+            "manda",
+            "envia",
+            "enviá",
+            "redact",
+            "tipe",
+            "coloc",
+            "deja",
+            "dejá",
+            "mete",
+            "carg",
+            "public",
+            "poste",
+        )
+    ):
         return None
 
     quoted = re.search(r"[\"“”'`]\s*([^\"“”'`]{1,320})\s*[\"“”'`]", msg)
@@ -425,7 +446,7 @@ def _extract_gemini_write_request(message: str) -> str | None:
     # "decile a cunn que abra gemini y escriba hola gemini"
     # extract only "hola gemini".
     verb_pat = re.compile(
-        r"\b(?:escrib\w*|dec[ií]\w*|pon[eé]\w*|manda\w*|envia\w*|envi[aá]\w*)\b",
+        r"\b(?:escrib\w*|dec[ií]\w*|pon[eé]\w*|manda\w*|envia\w*|envi[aá]\w*|redact\w*|tipe\w*|coloc\w*|deja\w*|dej[aá]\w*|mete\w*|carg\w*|public\w*|poste\w*)\b",
         flags=re.IGNORECASE,
     )
     matches = list(verb_pat.finditer(normalized))
