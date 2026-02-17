@@ -224,6 +224,21 @@ def _wmctrl_window_desktop(win_id: str) -> int | None:
     return None
 
 
+def _wmctrl_move_window_to_desktop(win_id: str, desktop_idx: int) -> bool:
+    if not shutil.which("wmctrl"):
+        return False
+    try:
+        subprocess.run(
+            ["wmctrl", "-i", "-r", win_id, "-t", str(int(desktop_idx))],
+            timeout=3,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except Exception:
+        return False
+
+
 def _preferred_workspace_and_anchor(expected_profile: str | None = None) -> tuple[int | None, str]:
     active = _xdotool_active_window()
     if active:
@@ -293,8 +308,69 @@ def _open_gemini_in_current_workspace_via_ui(
                 anchor = wid
                 break
     if not anchor:
-        profile_txt = str(expected_profile or "any")
-        return False, f"no_anchor_window_in_current_workspace profile={profile_txt}"
+        chrome = _chrome_command()
+        if not chrome:
+            return False, "no_anchor_and_chrome_not_found"
+        chrome_user_data = str(Path.home() / ".config" / "google-chrome")
+        try:
+            subprocess.Popen(
+                [
+                    chrome,
+                    f"--user-data-dir={chrome_user_data}",
+                    f"--profile-directory={expected_profile or 'Default'}",
+                    "--new-window",
+                    "about:blank",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception:
+            profile_txt = str(expected_profile or "any")
+            return False, f"no_anchor_window_in_current_workspace profile={profile_txt}"
+
+        spawned = ""
+        for _ in range(80):
+            now = _wmctrl_windows_for_desktop(workspace)
+            for wid, pid_raw, title in now:
+                t = title.lower()
+                if "chrome" not in t and "google" not in t and "about:blank" not in t:
+                    continue
+                if expected_profile and not _window_matches_profile(pid_raw, expected_profile):
+                    continue
+                spawned = wid
+                break
+            if spawned:
+                break
+            time.sleep(0.1)
+        if not spawned:
+            # Detect even if compositor initially placed it in another workspace.
+            for _ in range(80):
+                all_wins = _wmctrl_list()
+                for wid, title in all_wins.items():
+                    t = str(title).lower()
+                    if "chrome" not in t and "google" not in t and "about:blank" not in t:
+                        continue
+                    # Resolve pid/profile via desktop listing snapshots.
+                    for desk_idx in range(0, 12):
+                        for ww, pid_raw, _tt in _wmctrl_windows_for_desktop(desk_idx):
+                            if ww.lower() == wid.lower():
+                                if expected_profile and not _window_matches_profile(pid_raw, expected_profile):
+                                    continue
+                                spawned = wid
+                                break
+                        if spawned:
+                            break
+                    if spawned:
+                        break
+                if spawned:
+                    break
+                time.sleep(0.1)
+        if not spawned:
+            profile_txt = str(expected_profile or "any")
+            return False, f"no_anchor_window_in_current_workspace profile={profile_txt}"
+        _wmctrl_move_window_to_desktop(spawned, workspace)
+        anchor = spawned
 
     _xdotool_command(["windowactivate", anchor], timeout=2.5)
     time.sleep(0.22)
