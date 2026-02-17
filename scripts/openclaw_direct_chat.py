@@ -666,17 +666,17 @@ def _extract_gemini_ask_request(message: str) -> str | None:
     normalized = _normalize_text(message or "")
     if not any(t in normalized for t in SITE_CANONICAL_TOKENS.get("gemini", [])):
         return None
-    if not any(v in normalized for v in ("pregunt", "consult", "pedi", "pedile", "decile", "dile")):
+    if not any(v in normalized for v in ("pregunt", "consult", "pedi", "pedile", "decile", "dile", "busc")):
         return None
 
     m = re.search(
-        r"(?:pregunt\w*|consult\w*|ped\w*|dec\w*|dile)\s+(?:a\s+)?gemini\b[\s,:-]*(.+)$",
+        r"(?:pregunt\w*|consult\w*|ped\w*|dec\w*|dile|busc\w*)\s+(?:en\s+)?(?:a\s+)?gemini\b[\s,:-]*(.+)$",
         normalized,
         flags=re.IGNORECASE,
     )
     if not m:
         m = re.search(
-            r"\bgemini\b.*?(?:pregunt\w*|consult\w*|ped\w*|dec\w*|dile)\b[\s,:-]*(.+)$",
+            r"\bgemini\b.*?(?:pregunt\w*|consult\w*|ped\w*|dec\w*|dile|busc\w*)\b[\s,:-]*(.+)$",
             normalized,
             flags=re.IGNORECASE,
         )

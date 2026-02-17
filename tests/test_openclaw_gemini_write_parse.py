@@ -46,6 +46,11 @@ class TestGeminiWriteParser(unittest.TestCase):
         out = direct_chat._extract_gemini_ask_request(msg)
         self.assertEqual(out, "la receta de los binuelitos de manzana")
 
+    def test_extract_gemini_ask_busca(self) -> None:
+        msg = "cunn busca en gemini que es la fotosintesis"
+        out = direct_chat._extract_gemini_ask_request(msg)
+        self.assertEqual(out, "es la fotosintesis")
+
 
 if __name__ == "__main__":
     unittest.main()
