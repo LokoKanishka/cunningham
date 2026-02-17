@@ -28,6 +28,7 @@ _VRAM_CACHE = {"ts": 0.0, "data": None}
 HISTORY_DIR = Path.home() / ".openclaw" / "direct_chat_histories"
 HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 PROFILE_CONFIG_PATH = Path.home() / ".openclaw" / "direct_chat_browser_profiles.json"
+DIRECT_CHAT_ENV_PATH = Path(os.environ.get("OPENCLAW_DIRECT_CHAT_ENV", str(Path.home() / ".openclaw" / "direct_chat.env")))
 
 SITE_ALIASES = {
     "chatgpt": "https://chatgpt.com/",
@@ -73,6 +74,30 @@ HTML = UI_HTML
 
 BROWSER_WINDOWS_PATH = Path.home() / ".openclaw" / "direct_chat_opened_browser_windows.json"
 BROWSER_WINDOWS_LOCK_PATH = Path.home() / ".openclaw" / ".direct_chat_opened_browser_windows.lock"
+
+
+def _load_local_env_file(path: Path) -> None:
+    try:
+        if not path.exists():
+            return
+        for line in path.read_text(encoding="utf-8").splitlines():
+            raw = line.strip()
+            if not raw or raw.startswith("#"):
+                continue
+            if "=" not in raw:
+                continue
+            k, v = raw.split("=", 1)
+            key = k.strip()
+            if not key:
+                continue
+            val = v.strip().strip('"').strip("'")
+            if key not in os.environ:
+                os.environ[key] = val
+    except Exception:
+        return
+
+
+_load_local_env_file(DIRECT_CHAT_ENV_PATH)
 
 
 def _wmctrl_list() -> dict[str, str]:
@@ -979,21 +1004,61 @@ def _gemini_write_in_current_workspace(text: str, session_id: str | None = None)
     if not clean_ok:
         return False, f"dirty_chat_not_cleaned workspace={workspace} win={win_id} snap={clean_snap}"
 
-    _xdotool_command(["type", "--delay", "34", "--clearmodifiers", "--window", win_id, text], timeout=8.0)
-    time.sleep(0.25)
+    tools_anchor = _ocr_find_phrase_center(
+        snap_state,
+        [
+            "herramientas",
+            "tools",
+            "pensar",
+            "think",
+        ],
+    )
+    focus_candidates: list[tuple[int, int]] = [composer_center]
+    if tools_anchor:
+        tx, ty = tools_anchor
+        focus_candidates.append((tx, max(12, ty - int(gh * 0.080))))
+    focus_candidates.extend(
+        [
+            # Safe geometric fallbacks inside the upper half of the composer.
+            (int(gw * 0.58), int(gh * 0.53)),
+            (int(gw * 0.68), int(gh * 0.53)),
+            (int(gw * 0.58), int(gh * 0.56)),
+        ]
+    )
 
-    snap_pre = screen_dir / f"gemini_write_pre_{int(time.time() * 1000)}.png"
-    try:
-        subprocess.run(
-            [import_bin, "-window", win_id, str(snap_pre)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=4,
-        )
-    except Exception:
-        return False, f"pre_screenshot_failed workspace={workspace} win={win_id}"
+    snap_pre = None
+    pre_verified = False
+    focus_ok = False
+    for fx, fy in focus_candidates:
+        # Keep focus attempts in a conservative region to avoid clicks below composer.
+        fx = max(int(gw * 0.42), min(int(fx), int(gw * 0.95)))
+        fy = max(int(gh * 0.46), min(int(fy), int(gh * 0.60)))
+        px = gx + fx
+        py = gy + fy
+        _xdotool_command(["mousemove", str(px), str(py)], timeout=2.0)
+        _xdotool_command(["click", "1"], timeout=2.0)
+        time.sleep(0.08)
+        _xdotool_command(["type", "--delay", "34", "--clearmodifiers", "--window", win_id, text], timeout=8.0)
+        time.sleep(0.25)
 
-    pre_verified = _ocr_contains_text(snap_pre, text)
+        snap_try = screen_dir / f"gemini_write_pre_{int(time.time() * 1000)}.png"
+        try:
+            subprocess.run(
+                [import_bin, "-window", win_id, str(snap_try)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=4,
+            )
+        except Exception:
+            continue
+        snap_pre = snap_try
+        if _looks_like_phrase_still_in_composer(snap_try, text, gh):
+            focus_ok = True
+            pre_verified = True
+            break
+
+    if not focus_ok or not snap_pre:
+        return False, f"composer_focus_failed workspace={workspace} win={win_id} snap={snap_pre or snap_state}"
 
     send_pt_rel = _composer_send_click_point(snap_pre, gw, gh, composer_center)
     send_attempts = [("enter", None), ("ctrl_enter", None), ("enter_kp", None)]
@@ -1610,13 +1675,9 @@ def _maybe_handle_local_action(message: str, allowed_tools: set[str], session_id
     if gemini_ask_text:
         if ("web_ask" not in allowed_tools) and ("firefox" not in allowed_tools):
             return {"reply": "La herramienta local 'gemini write' está deshabilitada en esta sesión."}
-        _opened, error = _open_gemini_client_flow(session_id=session_id)
-        if error:
-            return {"reply": error}
-        ok, detail = _gemini_write_in_current_workspace(gemini_ask_text, session_id=session_id)
-        if ok:
-            return {"reply": f"Listo: en Gemini envié \"{gemini_ask_text}\". ({detail})"}
-        return {"reply": f"Abrí Gemini, pero no pude enviar el prompt automáticamente. ({detail})"}
+        result = web_ask.run_web_ask("gemini", gemini_ask_text, timeout_ms=60000, followups=None)
+        reply = web_ask.format_web_ask_reply("gemini", gemini_ask_text, result)
+        return {"reply": reply}
 
     gemini_write_text = _extract_gemini_write_request(message)
     if gemini_write_text:
@@ -1634,23 +1695,6 @@ def _maybe_handle_local_action(message: str, allowed_tools: set[str], session_id
         if ("web_ask" not in allowed_tools) and ("firefox" not in allowed_tools):
             return {"reply": "La herramienta local 'web_ask' está deshabilitada en esta sesión."}
         site_key, prompt, followups = web_req
-
-        # Hard policy requested by user:
-        # Any Gemini interaction must always start through the trained stable route
-        # (Google -> Gemini in configured client/profile), not via shadow web_ask login flow.
-        if site_key == "gemini":
-            _opened, error = _open_gemini_client_flow(session_id=session_id)
-            if error:
-                return {"reply": error}
-            ok_write, detail = _gemini_write_in_current_workspace(prompt, session_id=session_id)
-            if ok_write:
-                lines = [f"Listo: en Gemini envié \"{prompt}\". ({detail})"]
-                if isinstance(followups, list) and followups:
-                    lines.append("Seguimientos sugeridos:")
-                    for i, fup in enumerate(followups[:4], 1):
-                        lines.append(f"{i}. {fup}")
-                return {"reply": "\n".join(lines)}
-            return {"reply": f"Abrí Gemini con el flujo entrenado, pero no pude enviar el prompt automáticamente. ({detail})"}
 
         result = web_ask.run_web_ask(site_key, prompt, timeout_ms=60000, followups=followups)
         reply = web_ask.format_web_ask_reply(site_key, prompt, result)

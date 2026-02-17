@@ -9,6 +9,8 @@ import subprocess
 import time
 from pathlib import Path
 from urllib.parse import quote_plus
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 
 from .util import normalize_text, parse_json_object
 
@@ -40,6 +42,261 @@ SITE_SEARCH_TEMPLATES = {
     "youtube": "https://www.youtube.com/results?search_query={q}",
     "wikipedia": "https://es.wikipedia.org/w/index.php?search={q}",
 }
+
+
+def _env_flag(name: str, default: str = "0") -> bool:
+    raw = str(os.environ.get(name, default)).strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _gemini_api_enabled() -> bool:
+    return _env_flag("GEMINI_API_ENABLED", "1")
+
+
+def _gemini_api_key() -> str:
+    return str(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or "").strip()
+
+
+def _gemini_api_models() -> list[str]:
+    raw = str(
+        os.environ.get(
+            "GEMINI_API_MODELS",
+            "gemini-2.5-flash,gemini-2.0-flash,gemini-1.5-flash",
+        )
+    ).strip()
+    models: list[str] = []
+    for part in raw.split(","):
+        model = part.strip()
+        if model and model not in models:
+            models.append(model)
+    if not models:
+        models = ["gemini-2.0-flash"]
+    return models
+
+
+def _gemini_api_extract_text(payload: dict) -> str:
+    try:
+        candidates = payload.get("candidates")
+        if not isinstance(candidates, list):
+            return ""
+        out_parts: list[str] = []
+        for cand in candidates:
+            if not isinstance(cand, dict):
+                continue
+            content = cand.get("content")
+            if not isinstance(content, dict):
+                continue
+            parts = content.get("parts")
+            if not isinstance(parts, list):
+                continue
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                txt = str(part.get("text", "")).strip()
+                if txt:
+                    out_parts.append(txt)
+            if out_parts:
+                break
+        return "\n".join(out_parts).strip()
+    except Exception:
+        return ""
+
+
+def _gemini_api_status_from_error(code: int, detail: str) -> str:
+    d = (detail or "").lower()
+    if code == 401:
+        return "api_auth_error"
+    if code == 403:
+        return "api_auth_error"
+    if code == 404:
+        return "model_not_found"
+    if code == 429:
+        return "quota_exceeded"
+    if code >= 500:
+        return "upstream_error"
+    if "quota" in d or "rate" in d:
+        return "quota_exceeded"
+    if "api key" in d or "permission" in d or "unauthorized" in d:
+        return "api_auth_error"
+    return "runner_error"
+
+
+def _gemini_api_generate_once(
+    model: str,
+    api_key: str,
+    contents: list[dict],
+    timeout_ms: int,
+) -> tuple[bool, str, str]:
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    body = {"contents": contents}
+    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    req = Request(
+        url=url,
+        data=data,
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+    timeout_s = max(8.0, float(timeout_ms) / 1000.0)
+    try:
+        with urlopen(req, timeout=timeout_s) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+    except HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            detail = str(e)
+        status = _gemini_api_status_from_error(int(getattr(e, "code", 0) or 0), detail)
+        return False, status, detail[:800]
+    except URLError as e:
+        return False, "upstream_error", str(e)[:800]
+    except Exception as e:
+        return False, "runner_error", str(e)[:800]
+
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return False, "invalid_output", raw[:800]
+
+    if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+        err = payload.get("error", {})
+        code = int(err.get("code", 0) or 0)
+        detail = str(err.get("message", "") or json.dumps(err, ensure_ascii=False))
+        status = _gemini_api_status_from_error(code, detail)
+        return False, status, detail[:800]
+
+    text = _gemini_api_extract_text(payload)
+    if text:
+        return True, "ok", text
+
+    prompt_feedback = str(payload.get("promptFeedback", "")).lower()
+    if "block" in prompt_feedback or "safety" in prompt_feedback:
+        return False, "blocked", json.dumps(payload, ensure_ascii=False)[:800]
+    return False, "invalid_output", json.dumps(payload, ensure_ascii=False)[:800]
+
+
+def _run_gemini_api(prompt: str, timeout_ms: int = 60000, followups: list[str] | None = None) -> dict:
+    started = time.time()
+    if not _gemini_api_enabled():
+        return {
+            "ok": False,
+            "status": "api_disabled",
+            "text": "",
+            "evidence": "GEMINI_API_ENABLED=0",
+            "timings": {"start": started, "end": time.time(), "duration": 0.0},
+        }
+
+    api_key = _gemini_api_key()
+    if not api_key:
+        return {
+            "ok": False,
+            "status": "missing_api_key",
+            "text": "",
+            "evidence": "set GEMINI_API_KEY (or GOOGLE_API_KEY)",
+            "timings": {"start": started, "end": time.time(), "duration": 0.0},
+        }
+
+    prompts = [prompt]
+    if isinstance(followups, list):
+        prompts.extend([str(x).strip() for x in followups if str(x).strip()])
+
+    last_error = {
+        "ok": False,
+        "status": "runner_error",
+        "text": "",
+        "evidence": "no_model_attempted",
+        "timings": {"start": started, "end": time.time(), "duration": 0.0},
+    }
+
+    for model in _gemini_api_models():
+        contents: list[dict] = []
+        turns: list[dict] = []
+        failed = False
+        fail_status = ""
+        fail_evidence = ""
+
+        for p in prompts:
+            contents.append({"role": "user", "parts": [{"text": p}]})
+            ok, status, out = _gemini_api_generate_once(model=model, api_key=api_key, contents=contents, timeout_ms=timeout_ms)
+            if not ok:
+                failed = True
+                fail_status = status
+                fail_evidence = out
+                break
+            answer = str(out).strip()
+            turns.append({"prompt": p, "text": answer})
+            contents.append({"role": "model", "parts": [{"text": answer}]})
+
+        if not failed:
+            ended = time.time()
+            payload = {
+                "ok": True,
+                "status": "ok",
+                "text": (turns[-1]["text"] if turns else ""),
+                "turns": turns if len(turns) > 1 else None,
+                "provider": "gemini_api",
+                "model_used": model,
+                "evidence": "gemini_api_generateContent",
+                "timings": {"start": started, "end": ended, "duration": round(ended - started, 3)},
+            }
+            _log_web_ask(
+                {
+                    "ts": time.time(),
+                    "site": "gemini",
+                    "status": "ok",
+                    "ok": True,
+                    "runner_code": 0,
+                    "prompt": prompt[:220],
+                    "duration": payload["timings"]["duration"],
+                    "evidence": payload["evidence"],
+                    "provider": "gemini_api",
+                    "model_used": model,
+                }
+            )
+            return payload
+
+        ended = time.time()
+        last_error = {
+            "ok": False,
+            "status": fail_status or "runner_error",
+            "text": "",
+            "evidence": f"model={model} {fail_evidence}".strip()[:800],
+            "provider": "gemini_api",
+            "model_used": model,
+            "timings": {"start": started, "end": ended, "duration": round(ended - started, 3)},
+        }
+        # If model doesn't exist, try next model. For other failures, stop fast.
+        if fail_status != "model_not_found":
+            _log_web_ask(
+                {
+                    "ts": time.time(),
+                    "site": "gemini",
+                    "status": last_error["status"],
+                    "ok": False,
+                    "runner_code": -1,
+                    "prompt": prompt[:220],
+                    "duration": last_error["timings"]["duration"],
+                    "evidence": last_error["evidence"],
+                    "provider": "gemini_api",
+                    "model_used": model,
+                }
+            )
+            return last_error
+
+    _log_web_ask(
+        {
+            "ts": time.time(),
+            "site": "gemini",
+            "status": last_error["status"],
+            "ok": False,
+            "runner_code": -1,
+            "prompt": prompt[:220],
+            "duration": last_error.get("timings", {}).get("duration", None),
+            "evidence": last_error.get("evidence", ""),
+            "provider": "gemini_api",
+            "model_used": last_error.get("model_used", ""),
+        }
+    )
+    return last_error
 
 
 def _load_browser_profile_config() -> dict:
@@ -250,6 +507,13 @@ def bootstrap_login(site_key: str) -> tuple[bool, str]:
 
 def run_web_ask(site_key: str, prompt: str, timeout_ms: int = 60000, followups: list[str] | None = None) -> dict:
     started = time.time()
+    # Preferred stable path for Gemini: official API (free tier when available).
+    if site_key == "gemini":
+        api_result = _run_gemini_api(prompt=prompt, timeout_ms=timeout_ms, followups=followups)
+        # Fallback to web UI automation only when API is not configured/disabled.
+        if str(api_result.get("status", "")) not in ("missing_api_key", "api_disabled"):
+            return api_result
+
     browser, profile = _resolve_site_browser_config(site_key)
     if browser != "chrome":
         return {
@@ -473,6 +737,8 @@ def format_web_ask_reply(site_key: str, prompt: str, result: dict) -> str:
         profile_used = str(result.get("profile_used", "")).strip()
         profile_note = f" perfil={profile_used}" if profile_used else ""
         turns = result.get("turns")
+        model_used = str(result.get("model_used", "")).strip()
+        model_note = f" modelo={model_used}" if model_used else ""
         if isinstance(turns, list) and turns:
             out_lines = []
             for idx, t in enumerate(turns[:6], 1):
@@ -488,8 +754,8 @@ def format_web_ask_reply(site_key: str, prompt: str, result: dict) -> str:
             body = "\n".join(out_lines).strip()
             if len(body) > 6500:
                 body = body[:6500] + "\n\n[...truncado...]"
-            return f"{body}\n\nEstado: ok ({duration}s){profile_note}. Turnos: {len(turns)}."
-        return f"{provider} respondió:\n{text}\n\nEstado: ok ({duration}s){profile_note}."
+            return f"{body}\n\nEstado: ok ({duration}s){profile_note}{model_note}. Turnos: {len(turns)}."
+        return f"{provider} respondió:\n{text}\n\nEstado: ok ({duration}s){profile_note}{model_note}."
 
     help_map = {
         "login_required": f"No pude completar en {provider}: la sesión requiere login manual en ese sitio.",
@@ -504,6 +770,12 @@ def format_web_ask_reply(site_key: str, prompt: str, result: dict) -> str:
         "invalid_output": f"No pude completar en {provider}: salida inválida del runner.",
         "blocked": f"No pude completar en {provider}: el sitio bloqueó o devolvió estado no esperado.",
         "runner_error": f"No pude completar en {provider}: error interno del runner local.",
+        "missing_api_key": f"No pude completar en {provider} por API: falta GEMINI_API_KEY.",
+        "api_disabled": f"No pude completar en {provider} por API: está deshabilitada (GEMINI_API_ENABLED=0).",
+        "api_auth_error": f"No pude completar en {provider} por API: API key inválida o sin permisos.",
+        "quota_exceeded": f"No pude completar en {provider} por API: cuota/rate-limit excedido.",
+        "model_not_found": f"No pude completar en {provider} por API: modelo no disponible.",
+        "upstream_error": f"No pude completar en {provider} por API: error de red/servidor.",
     }
     detail = str(result.get("evidence", "")).strip()
     base = help_map.get(status, f"No pude completar en {provider}: estado '{status}'.")

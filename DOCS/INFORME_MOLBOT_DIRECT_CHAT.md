@@ -56,6 +56,16 @@ Notas:
 - Si falta login en shadow, responde `login_required` (fail-fast) con screenshot en `~/.openclaw/logs/web_ask_screens/`.
 - Bootstrap de login: `scripts/web_ask_bootstrap.sh [chatgpt|gemini] [profile_name]` o desde la UI: `login chatgpt` / `login gemini`.
 
+### 2.b) Gemini por API oficial (free tier)
+- Para `preguntale a gemini:` y `dialoga con gemini:`, ahora se prioriza API oficial (sin automatización de clicks).
+- Variables:
+  - `GEMINI_API_ENABLED=1` (default)
+  - `GEMINI_API_KEY=<tu_key_de_ai_studio>` (o `GOOGLE_API_KEY`)
+  - `GEMINI_API_MODELS=gemini-2.5-flash,gemini-2.0-flash,gemini-1.5-flash`
+- Persistencia local recomendada:
+  - `scripts/gemini_api_env.sh <GEMINI_API_KEY>`
+  - reiniciar: `scripts/openclaw_direct_chat.sh 8787`
+
 ### 3) Escritorio: abrir/cerrar sin borrar nada
 Acciones locales seguras (sin delete/move):
 - `abrí <nombre> del escritorio`

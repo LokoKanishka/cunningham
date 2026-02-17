@@ -4,8 +4,16 @@ set -euo pipefail
 PORT="${1:-8787}"
 LOG="DOCS/RUNS/openclaw_direct_chat.log"
 PID_FILE="/tmp/openclaw_direct_chat.pid"
+ENV_FILE="${OPENCLAW_DIRECT_CHAT_ENV:-$HOME/.openclaw/direct_chat.env}"
 
 mkdir -p DOCS/RUNS
+
+if [ -f "$ENV_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
+fi
 
 if [ -f "$PID_FILE" ]; then
   old_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
