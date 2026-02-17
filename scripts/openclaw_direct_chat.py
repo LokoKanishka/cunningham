@@ -666,17 +666,30 @@ def _extract_gemini_ask_request(message: str) -> str | None:
     normalized = _normalize_text(message or "")
     if not any(t in normalized for t in SITE_CANONICAL_TOKENS.get("gemini", [])):
         return None
-    if not any(v in normalized for v in ("pregunt", "consult", "pedi", "pedile", "decile", "dile", "busc")):
+    if not any(v in normalized for v in ("pregunt", "consult", "pedi", "pedile", "decile", "dile", "busc", "busq")):
         return None
 
+    # Variant: "busca <tema> en gemini"
     m = re.search(
-        r"(?:pregunt\w*|consult\w*|ped\w*|dec\w*|dile|busc\w*)\s+(?:en\s+)?(?:a\s+)?gemini\b[\s,:-]*(.+)$",
+        r"(?:^|\b)(?:que\s+)?(?:me\s+)?(?:busc\w*|busq\w*)\s+(.+?)\s+en\s+gemini\b",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        prompt = (m.group(1) or "").strip()
+        prompt = re.sub(r"^(sobre|acerca de)\s+", "", prompt, flags=re.IGNORECASE).strip()
+        prompt = prompt.strip(" .,:;\"'`")
+        if prompt:
+            return prompt[:320]
+
+    m = re.search(
+        r"(?:pregunt\w*|consult\w*|ped\w*|dec\w*|dile|busc\w*|busq\w*)\s+(?:en\s+)?(?:a\s+)?gemini\b[\s,:-]*(.+)$",
         normalized,
         flags=re.IGNORECASE,
     )
     if not m:
         m = re.search(
-            r"\bgemini\b.*?(?:pregunt\w*|consult\w*|ped\w*|dec\w*|dile|busc\w*)\b[\s,:-]*(.+)$",
+            r"\bgemini\b.*?(?:pregunt\w*|consult\w*|ped\w*|dec\w*|dile|busc\w*|busq\w*)\b[\s,:-]*(.+)$",
             normalized,
             flags=re.IGNORECASE,
         )
