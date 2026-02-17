@@ -834,11 +834,27 @@ def _gemini_write_in_current_workspace(text: str, session_id: str | None = None)
             )
             last_post = snap_post
             if not _looks_like_phrase_still_in_composer(snap_post, text, gh):
+                # Stabilize verdict: verify again shortly after to avoid transient false positives.
+                time.sleep(0.75)
+                snap_post_confirm = screen_dir / f"gemini_write_post_{int(time.time() * 1000)}_{action}_confirm.png"
+                try:
+                    subprocess.run(
+                        [import_bin, "-window", win_id, str(snap_post_confirm)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=4,
+                    )
+                    last_post = snap_post_confirm
+                    if _looks_like_phrase_still_in_composer(snap_post_confirm, text, gh):
+                        continue
+                except Exception:
+                    # If confirm capture fails, keep original optimistic sample.
+                    snap_post_confirm = snap_post
                 return True, (
                     f"verified workspace={workspace} win={win_id} click={px},{py} "
                     f"submit={action} dirty={int(dirty_detected)} "
                     f"pre_verified={int(pre_verified)} snap_pre={snap_pre} "
-                    f"snap_post={snap_post} opened={' | '.join(opened)}"
+                    f"snap_post={snap_post_confirm} opened={' | '.join(opened)}"
                 )
         except Exception:
             continue
