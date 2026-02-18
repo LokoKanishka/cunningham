@@ -5,7 +5,9 @@ Migramos la voz de `Molbot Direct Chat` a **AllTalk TTS** en Docker.
 ## Stack de voz
 
 - Compose: `apps/alltalk/compose.yaml`
-- Imagen: `erew123/alltalk_tts:latest`
+- Base: `erew123/alltalk_tts:latest`
+- Build local: `apps/alltalk/Dockerfile` (reinstala PyTorch CUDA 12.4 para RTX 5090)
+- Compatibilidad PyTorch 2.6: `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`
 - Puerto local: `127.0.0.1:7851`
 
 Levantar:

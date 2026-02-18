@@ -1,6 +1,8 @@
 services:
   alltalk:
-    image: erew123/alltalk_tts:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: lucy_voice_alltalk
     restart: unless-stopped
     ports:
