@@ -18,6 +18,8 @@ from urllib.parse import parse_qs, urlparse
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
 
+import requests
+
 from molbot_direct_chat import desktop_ops, web_ask, web_search
 from molbot_direct_chat.ui_html import HTML as UI_HTML
 from molbot_direct_chat.util import extract_url as _extract_url
@@ -82,6 +84,7 @@ VOICE_STATE_PATH = Path.home() / ".openclaw" / "direct_chat_voice.json"
 
 _VOICE_LOCK = threading.Lock()
 _VOICE_LAST_STATUS = {"ok": None, "detail": "not_started", "ts": 0.0}
+_TTS_PLAYBACK_PROC = None
 
 
 def _load_local_env_file(path: Path) -> None:
@@ -182,7 +185,7 @@ def _alltalk_health_path() -> str:
 
 
 def _alltalk_tts_path() -> str:
-    path = str(os.environ.get("DIRECT_CHAT_ALLTALK_TTS_PATH", "/api/tts")).strip()
+    path = str(os.environ.get("DIRECT_CHAT_ALLTALK_TTS_PATH", "/api/tts-generate")).strip()
     if not path.startswith("/"):
         path = "/" + path
     return path
@@ -215,29 +218,98 @@ def _tts_speak_alltalk(text: str, state: dict) -> tuple[bool, str]:
     if not msg:
         return False, "empty_text"
 
-    payload = {
-        "text": msg,
-        "language": "es",
-        "speaker": str(state.get("speaker", "Ana Florence")).strip() or "Ana Florence",
-    }
-    speaker_wav = str(state.get("speaker_wav", "")).strip()
-    if speaker_wav and Path(speaker_wav).exists():
-        payload["speaker_wav"] = speaker_wav
+    def _alltalk_character_voice() -> str:
+        explicit = str(os.environ.get("DIRECT_CHAT_ALLTALK_CHARACTER_VOICE", "")).strip()
+        if explicit:
+            return explicit
+        speaker_wav = str(state.get("speaker_wav", "")).strip()
+        if speaker_wav:
+            return Path(speaker_wav).name
+        speaker = str(state.get("speaker", "")).strip()
+        if speaker and speaker.lower().endswith(".wav"):
+            return speaker
+        return "ref_lucy.wav"
 
-    req = Request(
-        url=_alltalk_base_url() + _alltalk_tts_path(),
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        method="POST",
-        headers={"Content-Type": "application/json; charset=utf-8"},
-    )
+    def _save_tmp_wav(content: bytes) -> Path:
+        out = Path("/tmp") / f"openclaw_alltalk_{int(time.time() * 1000)}.wav"
+        out.write_bytes(content)
+        return out
+
+    def _play_audio_async(path: Path) -> tuple[bool, str]:
+        global _TTS_PLAYBACK_PROC
+        paplay = shutil.which("paplay")
+        ffplay = shutil.which("ffplay")
+        if paplay:
+            cmd = [paplay, str(path)]
+            player = "paplay"
+        elif ffplay:
+            cmd = [ffplay, "-nodisp", "-autoexit", "-loglevel", "quiet", str(path)]
+            player = "ffplay"
+        else:
+            return False, "no_audio_player"
+
+        try:
+            prev = _TTS_PLAYBACK_PROC
+            if prev is not None and prev.poll() is None:
+                prev.terminate()
+        except Exception:
+            pass
+
+        try:
+            _TTS_PLAYBACK_PROC = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return True, f"ok_player_{player}"
+        except Exception as e:
+            return False, f"player_spawn_failed:{e}"
+
+    payload = {
+        "text_input": msg,
+        "character_voice_gen": _alltalk_character_voice(),
+        "language": str(os.environ.get("DIRECT_CHAT_ALLTALK_LANGUAGE", "es")).strip() or "es",
+        "text_filtering": str(os.environ.get("DIRECT_CHAT_ALLTALK_TEXT_FILTERING", "standard")).strip() or "standard",
+        "autoplay": "false",
+    }
     timeout_s = float(_int_env("DIRECT_CHAT_ALLTALK_TIMEOUT_SEC", 60))
+    base_url = _alltalk_base_url() + "/"
+    req_url = _alltalk_base_url() + _alltalk_tts_path()
+
+    payload = {
+        k: v for k, v in payload.items() if str(v).strip()
+    }
+
     try:
-        with urlopen(req, timeout=max(2.0, timeout_s)) as resp:
-            _ = resp.read()
-            status = int(getattr(resp, "status", 200))
-        if status >= 200 and status < 300:
-            return True, f"ok_alltalk_http_{status}"
-        return False, f"alltalk_http_{status}"
+        resp = requests.post(req_url, data=payload, timeout=max(2.0, timeout_s))
+        resp.raise_for_status()
+        ctype = str(resp.headers.get("Content-Type", "")).lower()
+
+        if "application/json" in ctype:
+            info = resp.json() if resp.content else {}
+            if not isinstance(info, dict):
+                return False, "alltalk_invalid_json"
+            out_url = str(info.get("output_file_url") or info.get("output_cache_url") or "").strip()
+            if not out_url:
+                return False, f"alltalk_no_output_url:{info.get('status', 'unknown')}"
+            download_url = urllib.parse.urljoin(base_url, out_url)
+            audio_resp = requests.get(download_url, timeout=max(2.0, timeout_s))
+            audio_resp.raise_for_status()
+            audio_bytes = audio_resp.content
+        else:
+            audio_bytes = resp.content
+
+        if not audio_bytes:
+            return False, "alltalk_empty_audio"
+        out_file = _save_tmp_wav(audio_bytes)
+        return _play_audio_async(out_file)
+    except requests.exceptions.RequestException as e:
+        print(f"[voice] AllTalk request failed: {e}", file=sys.stderr)
+        return False, f"alltalk_request_failed:{e}"
+    except json.JSONDecodeError as e:
+        print(f"[voice] AllTalk JSON decode failed: {e}", file=sys.stderr)
+        return False, f"alltalk_json_decode_failed:{e}"
     except HTTPError as e:
         try:
             detail = e.read().decode("utf-8", errors="ignore")[:220]
