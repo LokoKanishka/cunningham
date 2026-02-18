@@ -6,6 +6,7 @@ Laboratorio desde cero para Moltbot upstream + modelos externos + cambio de mode
 - `PLAN.md` — objetivo, reglas, roadmap
 - `docs/SECURITY_CHECKLIST.md` — checklist para integrar comunidad
 - `docs/INTEGRATIONS.md` — registro de integraciones pinneadas
+- `DOCS/ALLTALK_DOCKER.md` — voz neural por Docker (AllTalk)
 
 ## Operación rápida
 - Botón rojo: `./scripts/verify_all.sh`

@@ -23,7 +23,7 @@ if [ -f "$PID_FILE" ]; then
   fi
 fi
 
-PY_BIN="${DIRECT_CHAT_PYTHON:-$HOME/.openclaw/venvs/xtts/bin/python}"
+PY_BIN="${DIRECT_CHAT_PYTHON:-python3}"
 if [ ! -x "$PY_BIN" ]; then
   PY_BIN="python3"
 fi

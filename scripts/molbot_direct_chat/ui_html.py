@@ -63,6 +63,48 @@ HTML = r"""<!doctype html>
       font-size: 13px;
     }
     .tools label { display: inline-flex; gap: 6px; align-items: center; }
+    .voice-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid #2fffd9;
+      color: #b7fff2;
+      background: linear-gradient(135deg, rgba(8, 38, 44, 0.85), rgba(6, 18, 32, 0.95));
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      cursor: pointer;
+      text-transform: uppercase;
+      box-shadow: 0 0 0 1px rgba(47, 255, 217, 0.2) inset;
+    }
+    .voice-toggle[data-on="0"] {
+      border-color: #6a789f;
+      color: #b4bdd6;
+      background: linear-gradient(135deg, rgba(26, 34, 58, 0.92), rgba(19, 25, 43, 0.96));
+      box-shadow: none;
+    }
+    .voice-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #2fffd9;
+      box-shadow: 0 0 10px rgba(47, 255, 217, 0.9);
+      transition: transform 0.12s ease;
+    }
+    .voice-toggle[data-on="0"] .voice-dot {
+      background: #8b96b8;
+      box-shadow: none;
+    }
+    .voice-toggle.speaking .voice-dot {
+      animation: voice-pulse 0.8s infinite;
+    }
+    @keyframes voice-pulse {
+      0% { transform: scale(1.0); box-shadow: 0 0 4px rgba(47, 255, 217, 0.6); }
+      50% { transform: scale(1.35); box-shadow: 0 0 14px rgba(47, 255, 217, 1); }
+      100% { transform: scale(1.0); box-shadow: 0 0 4px rgba(47, 255, 217, 0.6); }
+    }
     .meter {
       font-size: 12px;
       color: var(--muted);
@@ -143,7 +185,10 @@ HTML = r"""<!doctype html>
 	      <label><input type="checkbox" id="toolWebSearch" checked /> web_search</label>
 	      <label><input type="checkbox" id="toolWebAsk" checked /> web_ask</label>
 	      <label><input type="checkbox" id="toolDesktop" checked /> escritorio</label>
-	      <label><input type="checkbox" id="toolTts" checked /> voz</label>
+	      <button class="voice-toggle" id="voiceToggle" data-on="0" type="button">
+          <span class="voice-dot"></span>
+          <span id="voiceToggleText">VOZ OFF</span>
+        </button>
       <span class="small">Slash: /new /escritorio</span>
     </div>
 
@@ -171,7 +216,8 @@ HTML = r"""<!doctype html>
 	    const toolWebSearchEl = document.getElementById("toolWebSearch");
 	    const toolWebAskEl = document.getElementById("toolWebAsk");
 	    const toolDesktopEl = document.getElementById("toolDesktop");
-	    const toolTtsEl = document.getElementById("toolTts");
+	    const voiceToggleEl = document.getElementById("voiceToggle");
+	    const voiceToggleTextEl = document.getElementById("voiceToggleText");
 	    const attachEl = document.getElementById("attach");
 	    const attachInfoEl = document.getElementById("attachInfo");
 	    const meterEl = document.getElementById("meter");
@@ -182,6 +228,8 @@ HTML = r"""<!doctype html>
 
 	    let history = [];
 	    let pendingAttachments = [];
+      let voiceEnabled = true;
+      let speakingTimer = null;
 
 	    function fmtMb(mb) {
 	      if (mb == null || Number.isNaN(mb)) return "?";
@@ -215,10 +263,47 @@ HTML = r"""<!doctype html>
 	      if (toolWebSearchEl.checked) out.push("web_search");
 	      if (toolWebAskEl.checked) out.push("web_ask");
 	      if (toolDesktopEl.checked) out.push("desktop");
-	      if (toolTtsEl.checked) out.push("tts");
+	      if (voiceEnabled) out.push("tts");
 	      out.push("model");
 	      return out;
 	    }
+
+    function setVoiceVisual(enabled) {
+      voiceEnabled = !!enabled;
+      voiceToggleEl.dataset.on = voiceEnabled ? "1" : "0";
+      voiceToggleTextEl.textContent = voiceEnabled ? "VOZ ON" : "VOZ OFF";
+      localStorage.setItem("molbot_voice_enabled", voiceEnabled ? "1" : "0");
+    }
+
+    function markSpeaking(active) {
+      if (active) {
+        voiceToggleEl.classList.add("speaking");
+        return;
+      }
+      voiceToggleEl.classList.remove("speaking");
+    }
+
+    async function syncVoiceState() {
+      try {
+        const r = await fetch("/api/voice");
+        const j = await r.json();
+        setVoiceVisual(!!j.enabled);
+        return;
+      } catch {}
+      const ls = localStorage.getItem("molbot_voice_enabled");
+      setVoiceVisual(ls !== "0");
+    }
+
+    async function setVoiceStateServer(enabled) {
+      setVoiceVisual(enabled);
+      try {
+        await fetch("/api/voice", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: !!enabled }),
+        });
+      } catch {}
+    }
 
     function el(tag, cls, text) {
       const node = document.createElement(tag);
@@ -372,6 +457,11 @@ HTML = r"""<!doctype html>
               } catch {}
             }
           }
+          if (voiceEnabled) {
+            markSpeaking(true);
+            if (speakingTimer) clearTimeout(speakingTimer);
+            speakingTimer = setTimeout(() => markSpeaking(false), 6000);
+          }
           await saveServerHistory();
         }
       } catch (err) {
@@ -382,6 +472,7 @@ HTML = r"""<!doctype html>
         attachInfoEl.textContent = "";
         sendEl.disabled = false;
         inputEl.focus();
+        await syncVoiceState();
       }
     }
 
@@ -413,6 +504,12 @@ HTML = r"""<!doctype html>
       inputEl.focus();
     });
 
+    voiceToggleEl.addEventListener("click", async () => {
+      await setVoiceStateServer(!voiceEnabled);
+      if (!voiceEnabled) markSpeaking(false);
+    });
+
+    syncVoiceState();
     loadServerHistory().then(() => inputEl.focus());
     refreshMeter();
     setInterval(refreshMeter, 2000);

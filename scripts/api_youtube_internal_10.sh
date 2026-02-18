@@ -27,7 +27,7 @@ SESSION="api_yt_$(date +%s)"
 OUT_DIR="${HOME}/.openclaw/logs"
 mkdir -p "$OUT_DIR"
 LOG="$OUT_DIR/api_youtube_internal_${SESSION}.log"
-DC_PY_BIN="${DIRECT_CHAT_PYTHON:-$HOME/.openclaw/venvs/xtts/bin/python}"
+DC_PY_BIN="${DIRECT_CHAT_PYTHON:-python3}"
 if [[ ! -x "$DC_PY_BIN" ]]; then
   DC_PY_BIN="python3"
 fi

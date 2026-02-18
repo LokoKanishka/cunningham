@@ -81,6 +81,12 @@ Para este caso:
 
 Si no aparece automaticamente en UI, usar `Scan Stacks Folder` en Dockge.
 
+## Stack de voz (AllTalk)
+
+- Stack path: `apps/alltalk/compose.yaml`
+- Puerto esperado por Direct Chat: `127.0.0.1:7851`
+- Referencia: `DOCS/ALLTALK_DOCKER.md`
+
 ## Seguridad
 
 Dockge monta `/var/run/docker.sock`, por lo que tiene control total sobre Docker local.

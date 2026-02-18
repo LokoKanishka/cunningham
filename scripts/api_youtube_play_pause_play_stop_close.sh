@@ -44,7 +44,7 @@ else
     echo "ERROR: ya hay un direct-chat en puerto ${PORT}. Usá otro DC_PORT o USE_EXISTING_DC=1." >&2
     exit 1
   fi
-  DC_PY_BIN="${DIRECT_CHAT_PYTHON:-$HOME/.openclaw/venvs/xtts/bin/python}"
+  DC_PY_BIN="${DIRECT_CHAT_PYTHON:-python3}"
   if [[ ! -x "$DC_PY_BIN" ]]; then
     DC_PY_BIN="python3"
   fi

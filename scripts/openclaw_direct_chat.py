@@ -81,9 +81,7 @@ TRUSTED_DC_ANCHOR_PATH = Path.home() / ".openclaw" / "direct_chat_trusted_anchor
 VOICE_STATE_PATH = Path.home() / ".openclaw" / "direct_chat_voice.json"
 
 _VOICE_LOCK = threading.Lock()
-_TTS_MODEL = None
-_TTS_DEVICE = "cpu"
-_TTS_PLAYBACK_PROC = None
+_VOICE_LAST_STATUS = {"ok": None, "detail": "not_started", "ts": 0.0}
 
 
 def _load_local_env_file(path: Path) -> None:
@@ -122,7 +120,6 @@ def _default_voice_state() -> dict:
         "enabled": _env_flag("DIRECT_CHAT_TTS_ENABLED_DEFAULT", True),
         "speaker": str(os.environ.get("DIRECT_CHAT_TTS_SPEAKER", "Ana Florence")).strip() or "Ana Florence",
         "speaker_wav": str(os.environ.get("DIRECT_CHAT_TTS_SPEAKER_WAV", "")).strip(),
-        "model": str(os.environ.get("DIRECT_CHAT_TTS_MODEL", "tts_models/multilingual/multi-dataset/xtts_v2")).strip(),
     }
 
 
@@ -139,9 +136,6 @@ def _load_voice_state() -> dict:
                 speaker_wav = str(raw.get("speaker_wav", "")).strip()
                 if speaker_wav:
                     state["speaker_wav"] = speaker_wav
-                model = str(raw.get("model", "")).strip()
-                if model:
-                    state["model"] = model
     except Exception:
         pass
     return state
@@ -166,91 +160,119 @@ def _voice_enabled() -> bool:
     return bool(_load_voice_state().get("enabled", False))
 
 
-def _tts_load_model() -> tuple[bool, str]:
-    global _TTS_MODEL, _TTS_DEVICE
-    if _TTS_MODEL is not None:
-        return True, f"ok device={_TTS_DEVICE}"
+def _int_env(name: str, default: int) -> int:
+    raw = str(os.environ.get(name, "")).strip()
+    if not raw:
+        return int(default)
     try:
-        os.environ.setdefault("COQUI_TOS_AGREED", "1")
-        from TTS.api import TTS
-        import torch
-    except Exception as e:
-        return False, f"tts_import_failed: {e}"
-    state = _load_voice_state()
-    model_name = str(state.get("model", "")).strip() or "tts_models/multilingual/multi-dataset/xtts_v2"
+        return int(raw)
+    except Exception:
+        return int(default)
+
+
+def _alltalk_base_url() -> str:
+    return str(os.environ.get("DIRECT_CHAT_ALLTALK_URL", "http://127.0.0.1:7851")).strip().rstrip("/")
+
+
+def _alltalk_health_path() -> str:
+    path = str(os.environ.get("DIRECT_CHAT_ALLTALK_HEALTH_PATH", "/health")).strip()
+    if not path.startswith("/"):
+        path = "/" + path
+    return path
+
+
+def _alltalk_tts_path() -> str:
+    path = str(os.environ.get("DIRECT_CHAT_ALLTALK_TTS_PATH", "/api/tts")).strip()
+    if not path.startswith("/"):
+        path = "/" + path
+    return path
+
+
+def _alltalk_health(timeout_s: float = 0.5) -> tuple[bool, str]:
+    req = Request(url=_alltalk_base_url() + _alltalk_health_path(), method="GET")
     try:
-        tts = TTS(model_name)
-        _TTS_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-        if _TTS_DEVICE == "cuda":
-            tts = tts.to("cuda")
-        _TTS_MODEL = tts
-        return True, f"ok model={model_name} device={_TTS_DEVICE}"
+        with urlopen(req, timeout=max(0.2, timeout_s)) as resp:
+            body = resp.read().decode("utf-8", errors="ignore")
+            status = int(getattr(resp, "status", 200))
+        if status != 200:
+            return False, f"health_http_{status}"
+        try:
+            data = json.loads(body or "{}")
+            marker = str(data.get("status") or data.get("message") or "ok")
+            return True, marker
+        except Exception:
+            return True, "ok"
+    except HTTPError as e:
+        return False, f"health_http_error:{e.code}"
+    except URLError as e:
+        return False, f"health_url_error:{e.reason}"
     except Exception as e:
-        return False, f"tts_model_load_failed: {e}"
+        return False, f"health_error:{e}"
 
 
-def _tts_play_wav(path: str) -> tuple[bool, str]:
-    global _TTS_PLAYBACK_PROC
-    player = shutil.which("ffplay")
-    if not player:
-        return False, "ffplay_missing"
-    try:
-        prev = _TTS_PLAYBACK_PROC
-        if prev is not None and prev.poll() is None:
-            try:
-                prev.terminate()
-            except Exception:
-                pass
-        _TTS_PLAYBACK_PROC = subprocess.Popen(
-            [player, "-nodisp", "-autoexit", "-loglevel", "quiet", path],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-        return True, "ok"
-    except Exception as e:
-        return False, f"ffplay_failed: {e}"
-
-
-def _tts_speak_blocking(text: str) -> tuple[bool, str]:
+def _tts_speak_alltalk(text: str, state: dict) -> tuple[bool, str]:
     msg = str(text or "").strip()
     if not msg:
         return False, "empty_text"
-    ok, detail = _tts_load_model()
-    if not ok:
-        return False, detail
+
+    payload = {
+        "text": msg,
+        "language": "es",
+        "speaker": str(state.get("speaker", "Ana Florence")).strip() or "Ana Florence",
+    }
+    speaker_wav = str(state.get("speaker_wav", "")).strip()
+    if speaker_wav and Path(speaker_wav).exists():
+        payload["speaker_wav"] = speaker_wav
+
+    req = Request(
+        url=_alltalk_base_url() + _alltalk_tts_path(),
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json; charset=utf-8"},
+    )
+    timeout_s = float(_int_env("DIRECT_CHAT_ALLTALK_TIMEOUT_SEC", 60))
     try:
-        state = _load_voice_state()
-        speaker = str(state.get("speaker", "Ana Florence")).strip() or "Ana Florence"
-        speaker_wav = str(state.get("speaker_wav", "")).strip()
-        if speaker_wav and not Path(speaker_wav).exists():
-            speaker_wav = ""
-        out_path = str(Path("/tmp") / f"openclaw_tts_{int(time.time() * 1000)}.wav")
-        kwargs = {
-            "text": msg,
-            "file_path": out_path,
-            "language": "es",
-            "split_sentences": True,
-        }
-        if speaker_wav:
-            kwargs["speaker_wav"] = speaker_wav
-        else:
-            kwargs["speaker"] = speaker
-        _TTS_MODEL.tts_to_file(**kwargs)
-        return _tts_play_wav(out_path)
+        with urlopen(req, timeout=max(2.0, timeout_s)) as resp:
+            _ = resp.read()
+            status = int(getattr(resp, "status", 200))
+        if status >= 200 and status < 300:
+            return True, f"ok_alltalk_http_{status}"
+        return False, f"alltalk_http_{status}"
+    except HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8", errors="ignore")[:220]
+        except Exception:
+            detail = ""
+        return False, f"alltalk_http_error:{e.code}:{detail}"
+    except URLError as e:
+        return False, f"alltalk_url_error:{e.reason}"
     except Exception as e:
-        return False, f"tts_speak_failed: {e}"
+        return False, f"alltalk_request_error:{e}"
+
+
+def _tts_speak_blocking(text: str) -> tuple[bool, str]:
+    state = _load_voice_state()
+    return _tts_speak_alltalk(text, state)
 
 
 def _speak_reply_async(text: str) -> None:
+    global _VOICE_LAST_STATUS
+    _VOICE_LAST_STATUS = {"ok": None, "detail": "queued", "ts": time.time()}
+
     def _run():
-        with _VOICE_LOCK:
-            _tts_speak_blocking(text)
+        global _VOICE_LAST_STATUS
+        try:
+            with _VOICE_LOCK:
+                ok, detail = _tts_speak_blocking(text)
+                _VOICE_LAST_STATUS = {"ok": bool(ok), "detail": str(detail), "ts": time.time()}
+        except Exception as e:
+            _VOICE_LAST_STATUS = {"ok": False, "detail": f"tts_thread_error: {e}", "ts": time.time()}
 
     try:
         th = threading.Thread(target=_run, daemon=True)
         th.start()
     except Exception:
+        _VOICE_LAST_STATUS = {"ok": False, "detail": "tts_thread_start_failed", "ts": time.time()}
         return
 
 
@@ -2315,14 +2337,14 @@ def _maybe_handle_local_action(message: str, allowed_tools: set[str], session_id
     if "tts" in allowed_tools:
         if any(k in normalized for k in ("voz off", "silenciar voz", "mute voz", "apaga la voz", "desactiva voz")):
             _set_voice_enabled(False)
-            return {"reply": "Listo: desactivé la voz local."}
+            return {"reply": "Listo: desactivé la voz."}
         if any(k in normalized for k in ("voz on", "activa voz", "encende voz", "enciende voz")):
             _set_voice_enabled(True)
-            return {"reply": "Listo: activé la voz local."}
+            return {"reply": "Listo: activé la voz."}
         if any(k in normalized for k in ("voz test", "proba voz", "probar voz", "test de voz")):
             _set_voice_enabled(True)
-            _speak_reply_async("Prueba de voz local activada. Sistema listo.")
-            return {"reply": "Ejecuté prueba de voz local."}
+            _speak_reply_async("Prueba de voz activada. Sistema listo.")
+            return {"reply": "Ejecuté prueba de voz."}
 
     yt_transport = _extract_youtube_transport_request(message)
     if yt_transport:
@@ -2703,6 +2725,12 @@ def _maybe_handle_local_action(message: str, allowed_tools: set[str], session_id
     return None
 
 
+def _is_voice_control_command(message: str) -> bool:
+    normalized = _normalize_text(message)
+    keys = ("voz on", "voz off", "voz test", "activa voz", "desactiva voz", "silenciar voz", "mute voz")
+    return any(k in normalized for k in keys)
+
+
 def _build_system_prompt(mode: str, allowed_tools: set[str]) -> str:
     base = [
         "Habla en español claro.",
@@ -2798,6 +2826,24 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, self._metrics_payload())
             return
 
+        if path == "/api/voice":
+            state = _load_voice_state()
+            server_ok, server_detail = _alltalk_health(timeout_s=0.35)
+            self._json(
+                200,
+                {
+                    "enabled": bool(state.get("enabled", False)),
+                    "speaker": str(state.get("speaker", "")),
+                    "speaker_wav": str(state.get("speaker_wav", "")),
+                    "provider": "alltalk",
+                    "server_url": _alltalk_base_url(),
+                    "server_ok": bool(server_ok),
+                    "server_detail": str(server_detail),
+                    "last_status": _VOICE_LAST_STATUS,
+                },
+            )
+            return
+
         self.send_response(404)
         self.end_headers()
 
@@ -2857,6 +2903,32 @@ class Handler(BaseHTTPRequestHandler):
             return json.loads(resp.read().decode("utf-8"))
 
     def do_POST(self):
+        if self.path == "/api/voice":
+            try:
+                payload = self._parse_payload()
+                state = _load_voice_state()
+                if "enabled" in payload:
+                    state["enabled"] = bool(payload.get("enabled"))
+                speaker = str(payload.get("speaker", "")).strip()
+                if speaker:
+                    state["speaker"] = speaker
+                speaker_wav = str(payload.get("speaker_wav", "")).strip()
+                if speaker_wav:
+                    state["speaker_wav"] = speaker_wav
+                _save_voice_state(state)
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "enabled": bool(state.get("enabled", False)),
+                        "speaker": str(state.get("speaker", "")),
+                        "speaker_wav": str(state.get("speaker_wav", "")),
+                    },
+                )
+            except Exception as e:
+                self._json(500, {"error": str(e)})
+            return
+
         if self.path == "/api/history":
             try:
                 payload = self._parse_payload()
@@ -2905,7 +2977,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header("Connection", "close")
                     self.end_headers()
                     reply = str(local_action.get("reply", ""))
-                    _maybe_speak_reply(reply, allowed_tools)
+                    if not _is_voice_control_command(message):
+                        _maybe_speak_reply(reply, allowed_tools)
                     out = json.dumps({"token": reply}, ensure_ascii=False).encode("utf-8")
                     try:
                         self.wfile.write(b"data: " + out + b"\n\n")
@@ -2916,7 +2989,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.close_connection = True
                     return
 
-                _maybe_speak_reply(str(local_action.get("reply", "")), allowed_tools)
+                if not _is_voice_control_command(message):
+                    _maybe_speak_reply(str(local_action.get("reply", "")), allowed_tools)
                 self._json(200, local_action)
                 return
 
