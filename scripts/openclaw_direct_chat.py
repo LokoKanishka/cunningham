@@ -4,6 +4,7 @@ import fcntl
 import html
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -85,6 +86,10 @@ VOICE_STATE_PATH = Path.home() / ".openclaw" / "direct_chat_voice.json"
 _VOICE_LOCK = threading.Lock()
 _VOICE_LAST_STATUS = {"ok": None, "detail": "not_started", "ts": 0.0}
 _TTS_PLAYBACK_PROC = None
+_TTS_STREAM_LOCK = threading.Lock()
+_TTS_STREAM_ID = 0
+_TTS_STOP_EVENT = threading.Event()
+_TTS_ACTIVE_QUEUE = None
 
 
 def _load_local_env_file(path: Path) -> None:
@@ -213,10 +218,233 @@ def _alltalk_health(timeout_s: float = 0.5) -> tuple[bool, str]:
         return False, f"health_error:{e}"
 
 
-def _tts_speak_alltalk(text: str, state: dict) -> tuple[bool, str]:
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F1E6-\U0001F1FF"
+    "\U0001F300-\U0001FAFF"
+    "\U00002600-\U000026FF"
+    "\U00002700-\U000027BF"
+    "]",
+    flags=re.UNICODE,
+)
+
+
+def _clean_for_tts(text: str) -> str:
+    msg = html.unescape(str(text or ""))
+    if not msg.strip():
+        return ""
+    msg = msg.replace("\r\n", "\n").replace("\r", "\n")
+    msg = re.sub(r"```[\s\S]*?```", " ", msg)
+    msg = re.sub(r"`([^`]*)`", r"\1", msg)
+    msg = re.sub(r"\[([^\]]+)\]\((?:https?://|www\.)[^\)]+\)", r"\1", msg)
+    msg = re.sub(r"(https?://\S+|www\.\S+)", " ", msg)
+    msg = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", msg)
+    msg = re.sub(r"#(?=\w)", "", msg)
+    msg = re.sub(r"(?m)^\s*>\s?", "", msg)
+    msg = re.sub(r"[*_~]+", "", msg)
+    msg = _EMOJI_RE.sub(" ", msg)
+
+    lines = []
+    saw_blank = False
+    for raw in msg.split("\n"):
+        line = re.sub(r"[ \t]+", " ", raw).strip()
+        if not line:
+            if lines and not saw_blank:
+                lines.append("")
+            saw_blank = True
+            continue
+        lines.append(line)
+        saw_blank = False
+    out = "\n".join(lines).strip()
+    return re.sub(r"\n{3,}", "\n\n", out)
+
+
+def _split_hard_limit(text: str, max_len: int) -> list[str]:
+    out: list[str] = []
+    rest = str(text or "").strip()
+    while rest:
+        if len(rest) <= max_len:
+            out.append(rest)
+            break
+        cut = rest.rfind(" ", 0, max_len + 1)
+        if cut < int(max_len * 0.5):
+            cut = max_len
+        out.append(rest[:cut].strip())
+        rest = rest[cut:].strip()
+    return out
+
+
+def _chunk_text_for_tts(text: str, max_len: int = 250) -> list[str]:
+    cleaned = _clean_for_tts(text)
+    if not cleaned:
+        return []
+    max_len = max(80, int(max_len))
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", cleaned) if p.strip()]
+    if not paragraphs:
+        paragraphs = [cleaned]
+
+    chunks: list[str] = []
+    for para in paragraphs:
+        current = ""
+        sentence_parts = [s.strip() for s in re.split(r"(?<=[.!?])\s+", para) if s.strip()]
+        if not sentence_parts:
+            sentence_parts = [para]
+
+        for sentence in sentence_parts:
+            comma_parts = [sentence]
+            if len(sentence) > max_len:
+                comma_parts = [p.strip() for p in re.split(r"(?<=,)\s+", sentence) if p.strip()]
+                if not comma_parts:
+                    comma_parts = [sentence]
+
+            for part in comma_parts:
+                if len(part) > max_len:
+                    for hard in _split_hard_limit(part, max_len):
+                        if current:
+                            chunks.append(current)
+                            current = ""
+                        chunks.append(hard)
+                    continue
+                if not current:
+                    current = part
+                elif len(current) + 1 + len(part) <= max_len:
+                    current = f"{current} {part}"
+                else:
+                    chunks.append(current)
+                    current = part
+
+        if current:
+            chunks.append(current)
+    return chunks
+
+
+def _set_voice_status(stream_id: int, ok: bool | None, detail: str) -> None:
+    global _VOICE_LAST_STATUS
+    with _TTS_STREAM_LOCK:
+        if stream_id != _TTS_STREAM_ID:
+            return
+    _VOICE_LAST_STATUS = {"ok": ok, "detail": str(detail), "ts": time.time()}
+
+
+def _stop_playback_process() -> None:
+    global _TTS_PLAYBACK_PROC
+    with _TTS_STREAM_LOCK:
+        proc = _TTS_PLAYBACK_PROC
+        _TTS_PLAYBACK_PROC = None
+    if proc is None:
+        return
+    try:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=1.0)
+            except Exception:
+                proc.kill()
+    except Exception:
+        return
+
+
+def _start_new_tts_stream() -> tuple[int, threading.Event]:
+    global _TTS_STREAM_ID, _TTS_STOP_EVENT, _TTS_ACTIVE_QUEUE
+    with _TTS_STREAM_LOCK:
+        prev_event = _TTS_STOP_EVENT
+        prev_queue = _TTS_ACTIVE_QUEUE
+        _TTS_STREAM_ID += 1
+        stream_id = _TTS_STREAM_ID
+        stop_event = threading.Event()
+        _TTS_STOP_EVENT = stop_event
+        _TTS_ACTIVE_QUEUE = None
+
+    prev_event.set()
+    _stop_playback_process()
+
+    if prev_queue is not None:
+        try:
+            while True:
+                item = prev_queue.get_nowait()
+                if isinstance(item, Path):
+                    try:
+                        item.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+        except queue.Empty:
+            pass
+        try:
+            prev_queue.put_nowait(None)
+        except Exception:
+            pass
+    return stream_id, stop_event
+
+
+def _set_tts_queue(stream_id: int, tts_queue: queue.Queue | None) -> None:
+    global _TTS_ACTIVE_QUEUE
+    with _TTS_STREAM_LOCK:
+        if stream_id == _TTS_STREAM_ID:
+            _TTS_ACTIVE_QUEUE = tts_queue
+
+
+def _play_audio_blocking(path: Path, stop_event: threading.Event) -> tuple[bool, str]:
+    global _TTS_PLAYBACK_PROC
+    paplay = shutil.which("paplay")
+    ffplay = shutil.which("ffplay")
+    if paplay:
+        cmd = [paplay, str(path)]
+        player = "paplay"
+    elif ffplay:
+        cmd = [ffplay, "-nodisp", "-autoexit", "-loglevel", "quiet", str(path)]
+        player = "ffplay"
+    else:
+        return False, "no_audio_player"
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception as e:
+        return False, f"player_spawn_failed:{e}"
+
+    try:
+        with _TTS_STREAM_LOCK:
+            if stop_event.is_set():
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                return False, "playback_interrupted"
+            _TTS_PLAYBACK_PROC = proc
+
+        while True:
+            rc = proc.poll()
+            if rc is not None:
+                if rc == 0:
+                    return True, f"ok_player_{player}"
+                return False, f"player_exit_{rc}:{player}"
+            if stop_event.is_set():
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=1.0)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                return False, "playback_interrupted"
+            time.sleep(0.05)
+    except Exception as e:
+        return False, f"player_runtime_failed:{e}"
+    finally:
+        with _TTS_STREAM_LOCK:
+            if _TTS_PLAYBACK_PROC is proc:
+                _TTS_PLAYBACK_PROC = None
+
+
+def _tts_speak_alltalk(text: str, state: dict) -> tuple[Path | None, str]:
     msg = str(text or "").strip()
     if not msg:
-        return False, "empty_text"
+        return None, "empty_text"
 
     def _alltalk_character_voice() -> str:
         explicit = str(os.environ.get("DIRECT_CHAT_ALLTALK_CHARACTER_VOICE", "")).strip()
@@ -234,37 +462,6 @@ def _tts_speak_alltalk(text: str, state: dict) -> tuple[bool, str]:
         out = Path("/tmp") / f"openclaw_alltalk_{int(time.time() * 1000)}.wav"
         out.write_bytes(content)
         return out
-
-    def _play_audio_async(path: Path) -> tuple[bool, str]:
-        global _TTS_PLAYBACK_PROC
-        paplay = shutil.which("paplay")
-        ffplay = shutil.which("ffplay")
-        if paplay:
-            cmd = [paplay, str(path)]
-            player = "paplay"
-        elif ffplay:
-            cmd = [ffplay, "-nodisp", "-autoexit", "-loglevel", "quiet", str(path)]
-            player = "ffplay"
-        else:
-            return False, "no_audio_player"
-
-        try:
-            prev = _TTS_PLAYBACK_PROC
-            if prev is not None and prev.poll() is None:
-                prev.terminate()
-        except Exception:
-            pass
-
-        try:
-            _TTS_PLAYBACK_PROC = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-            return True, f"ok_player_{player}"
-        except Exception as e:
-            return False, f"player_spawn_failed:{e}"
 
     default_voice = str(os.environ.get("DIRECT_CHAT_ALLTALK_DEFAULT_VOICE", "female_01.wav")).strip() or "female_01.wav"
     primary_voice = _alltalk_character_voice()
@@ -304,7 +501,7 @@ def _tts_speak_alltalk(text: str, state: dict) -> tuple[bool, str]:
                 print(f"[voice] AllTalk HTTP {resp.status_code} (voice={voice_name}): {detail}", file=sys.stderr)
                 if idx + 1 < len(voices_to_try):
                     continue
-                return False, last_http_detail
+                return None, last_http_detail
 
             ctype = str(resp.headers.get("Content-Type", "")).lower()
             if "application/json" in ctype:
@@ -312,12 +509,12 @@ def _tts_speak_alltalk(text: str, state: dict) -> tuple[bool, str]:
                 if not isinstance(info, dict):
                     if idx + 1 < len(voices_to_try):
                         continue
-                    return False, "alltalk_invalid_json"
+                    return None, "alltalk_invalid_json"
                 out_url = str(info.get("output_file_url") or info.get("output_cache_url") or "").strip()
                 if not out_url:
                     if idx + 1 < len(voices_to_try):
                         continue
-                    return False, f"alltalk_no_output_url:{info.get('status', 'unknown')}"
+                    return None, f"alltalk_no_output_url:{info.get('status', 'unknown')}"
                 download_url = urllib.parse.urljoin(base_url, out_url)
                 audio_resp = requests.get(download_url, timeout=max(2.0, timeout_s))
                 audio_resp.raise_for_status()
@@ -328,56 +525,137 @@ def _tts_speak_alltalk(text: str, state: dict) -> tuple[bool, str]:
             if not audio_bytes:
                 if idx + 1 < len(voices_to_try):
                     continue
-                return False, "alltalk_empty_audio"
-
-            out_file = _save_tmp_wav(audio_bytes)
-            return _play_audio_async(out_file)
+                return None, "alltalk_empty_audio"
+            return _save_tmp_wav(audio_bytes), f"ok_voice_{voice_name}"
 
         if last_http_detail:
-            return False, last_http_detail
-        return False, "alltalk_retry_exhausted"
+            return None, last_http_detail
+        return None, "alltalk_retry_exhausted"
     except requests.exceptions.RequestException as e:
         print(f"[voice] AllTalk request failed: {e}", file=sys.stderr)
-        return False, f"alltalk_request_failed:{e}"
+        return None, f"alltalk_request_failed:{e}"
     except json.JSONDecodeError as e:
         print(f"[voice] AllTalk JSON decode failed: {e}", file=sys.stderr)
-        return False, f"alltalk_json_decode_failed:{e}"
+        return None, f"alltalk_json_decode_failed:{e}"
     except HTTPError as e:
         try:
             detail = e.read().decode("utf-8", errors="ignore")[:220]
         except Exception:
             detail = ""
-        return False, f"alltalk_http_error:{e.code}:{detail}"
+        return None, f"alltalk_http_error:{e.code}:{detail}"
     except URLError as e:
-        return False, f"alltalk_url_error:{e.reason}"
+        return None, f"alltalk_url_error:{e.reason}"
     except Exception as e:
-        return False, f"alltalk_request_error:{e}"
-
-
-def _tts_speak_blocking(text: str) -> tuple[bool, str]:
-    state = _load_voice_state()
-    return _tts_speak_alltalk(text, state)
+        return None, f"alltalk_request_error:{e}"
 
 
 def _speak_reply_async(text: str) -> None:
-    global _VOICE_LAST_STATUS
-    _VOICE_LAST_STATUS = {"ok": None, "detail": "queued", "ts": time.time()}
+    stream_id, stop_event = _start_new_tts_stream()
+    _set_voice_status(stream_id, None, "queued")
 
-    def _run():
-        global _VOICE_LAST_STATUS
+    chunks = _chunk_text_for_tts(text, max_len=_int_env("DIRECT_CHAT_TTS_CHUNK_MAX_LEN", 250))
+    if not chunks:
+        _set_voice_status(stream_id, False, "empty_text")
+        return
+
+    def _run() -> None:
+        state = _load_voice_state()
+        tts_queue: queue.Queue[Path | None] = queue.Queue(maxsize=max(1, _int_env("DIRECT_CHAT_TTS_QUEUE_SIZE", 3)))
+        _set_tts_queue(stream_id, tts_queue)
+
+        producer_error = {"detail": ""}
+
+        def _producer() -> None:
+            try:
+                for chunk in chunks:
+                    if stop_event.is_set():
+                        return
+                    wav_path, detail = _tts_speak_alltalk(chunk, state)
+                    if wav_path is None:
+                        producer_error["detail"] = detail
+                        return
+                    while not stop_event.is_set():
+                        try:
+                            tts_queue.put(wav_path, timeout=0.2)
+                            break
+                        except queue.Full:
+                            continue
+            finally:
+                while True:
+                    try:
+                        tts_queue.put(None, timeout=0.2)
+                        return
+                    except queue.Full:
+                        if stop_event.is_set():
+                            try:
+                                stale = tts_queue.get_nowait()
+                                if isinstance(stale, Path):
+                                    try:
+                                        stale.unlink(missing_ok=True)
+                                    except Exception:
+                                        pass
+                            except queue.Empty:
+                                pass
+
+        producer_thread = threading.Thread(target=_producer, daemon=True)
+        producer_thread.start()
+
+        played_any = False
+        last_detail = "ok_stream"
+        interrupted = False
+
         try:
-            with _VOICE_LOCK:
-                ok, detail = _tts_speak_blocking(text)
-                _VOICE_LAST_STATUS = {"ok": bool(ok), "detail": str(detail), "ts": time.time()}
-        except Exception as e:
-            _VOICE_LAST_STATUS = {"ok": False, "detail": f"tts_thread_error: {e}", "ts": time.time()}
+            while True:
+                try:
+                    item = tts_queue.get(timeout=0.2)
+                except queue.Empty:
+                    if producer_thread.is_alive():
+                        continue
+                    if stop_event.is_set():
+                        interrupted = True
+                        break
+                    if producer_error["detail"]:
+                        break
+                    continue
+
+                if item is None:
+                    break
+
+                ok, detail = _play_audio_blocking(item, stop_event)
+                try:
+                    item.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+                if not ok:
+                    if detail == "playback_interrupted":
+                        interrupted = True
+                        break
+                    producer_error["detail"] = producer_error["detail"] or detail
+                    break
+
+                played_any = True
+                last_detail = detail
+        finally:
+            producer_thread.join(timeout=1.0)
+            _set_tts_queue(stream_id, None)
+
+        if interrupted:
+            _set_voice_status(stream_id, False, "playback_interrupted")
+            return
+        if producer_error["detail"]:
+            _set_voice_status(stream_id, False, producer_error["detail"])
+            return
+        if played_any:
+            _set_voice_status(stream_id, True, last_detail)
+            return
+        _set_voice_status(stream_id, False, "tts_no_audio")
 
     try:
         th = threading.Thread(target=_run, daemon=True)
         th.start()
     except Exception:
-        _VOICE_LAST_STATUS = {"ok": False, "detail": "tts_thread_start_failed", "ts": time.time()}
-        return
+        _set_voice_status(stream_id, False, "tts_thread_start_failed")
 
 
 def _maybe_speak_reply(reply: str, allowed_tools: set[str]) -> None:
