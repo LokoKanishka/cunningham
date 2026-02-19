@@ -3173,6 +3173,25 @@ def _split_alias_csv(raw: str) -> dict[str, str]:
     return out
 
 
+def _model_name_variants(name: str) -> set[str]:
+    val = str(name or "").strip()
+    if not val:
+        return set()
+    out = {val}
+    if ":" in val:
+        out.add(val.split(":", 1)[0].strip())
+    else:
+        out.add(f"{val}:latest")
+    return {item for item in out if item}
+
+
+def _normalized_model_name_set(names: list[str]) -> set[str]:
+    out: set[str] = set()
+    for name in names:
+        out.update(_model_name_variants(name))
+    return out
+
+
 def _unique_keep_order(items: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -3318,9 +3337,14 @@ def _model_catalog(force_refresh: bool = False) -> dict:
         ).strip()
     )
     alias_map = _model_alias_map()
+    alias_targets = {v for v in alias_map.values() if v}
     filtered_installed_local: list[str] = []
     candidate_set = set(local_candidates)
     for mid in installed_local:
+        # Keep selector stable: if a target is already represented by an alias candidate,
+        # do not expose the raw target model as a separate option.
+        if mid in alias_targets and any(alias_map.get(cand) == mid for cand in local_candidates):
+            continue
         if (not _is_chat_selector_model(mid)) and mid not in candidate_set:
             continue
         filtered_installed_local.append(mid)
@@ -3346,12 +3370,17 @@ def _model_catalog(force_refresh: bool = False) -> dict:
             }
         )
 
-    installed_set = set(installed_local)
+    installed_set = _normalized_model_name_set(installed_local)
+    local_selector_keys: set[str] = set()
     for mid in local_all:
+        canonical_selector_id = mid[:-7] if mid.lower().endswith(":latest") else mid
+        if canonical_selector_id in local_selector_keys:
+            continue
         runtime_id = alias_map.get(mid, mid)
         is_available = runtime_id in installed_set
         if (not _is_chat_selector_model(mid)) and (not is_available):
             continue
+        local_selector_keys.add(canonical_selector_id)
         _add(
             {
                 "id": mid,
