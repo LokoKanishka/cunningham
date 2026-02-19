@@ -2460,6 +2460,20 @@ def _looks_like_youtube_play_request(normalized: str) -> bool:
     return playish
 
 
+def _looks_like_open_top_results_request(normalized: str) -> bool:
+    text = str(normalized or "")
+    if not text:
+        return False
+    openish = any(t in text for t in ("abr", "open", "lanz", "inici"))
+    if not openish:
+        return False
+    refs_results = any(t in text for t in ("resultado", "resultados", "link", "links", "top"))
+    if not refs_results:
+        return False
+    wants_three = any(t in text for t in (" top 3", "top3", "3 resultados", "tres resultados", "primeros 3", "primeros tres"))
+    return wants_three
+
+
 def _sanitize_youtube_query(query: str) -> str:
     q = (query or "").strip().strip("\"'").strip()
     if not q:
@@ -3002,6 +3016,48 @@ def _maybe_handle_local_action(message: str, allowed_tools: set[str], session_id
 
     if search_req and ("web_search" in allowed_tools):
         query, site_key = search_req
+        if "firefox" in allowed_tools and _looks_like_open_top_results_request(normalized):
+            ok_g, gd = _guardrail_check(
+                session_id,
+                "web_search",
+                {"action": "search_open_top_results", "query": query[:500], "site": (site_key or ""), "top_n": 3},
+            )
+            if not ok_g:
+                return {"reply": _guardrail_block_reply("web_search", gd)}
+            sp = web_search.searxng_search(query, site_key=site_key, max_results=8)
+            if not sp.get("ok"):
+                err = str(sp.get("error", "web_search_failed"))
+                return {"reply": f"No pude buscar en SearXNG local: {err}"}
+            results = sp.get("results", []) if isinstance(sp.get("results"), list) else []
+            top: list[dict] = []
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url", "")).strip()
+                if not url:
+                    continue
+                top.append(item)
+                if len(top) >= 3:
+                    break
+            if not top:
+                return {"reply": f"No encontré resultados útiles para abrir sobre: {query}"}
+            best_url = str(top[0].get("url", "")).strip()
+            ok_g2, gd2 = _guardrail_check(
+                session_id,
+                "browser_vision",
+                {"action": "open_search_result", "query": query[:500], "site": (site_key or ""), "url": best_url},
+            )
+            if not ok_g2:
+                return {"reply": _guardrail_block_reply("browser_vision", gd2)}
+            opened, error = _open_site_urls([(site_key, best_url)], session_id=session_id)
+            if error:
+                return {"reply": error}
+            lines = [f"Abrí el mejor resultado de la búsqueda para '{query}': {opened[0]}", "Top 3 detectados:"]
+            for i, item in enumerate(top, 1):
+                title = str(item.get("title", "")).strip() or "(sin titulo)"
+                url = str(item.get("url", "")).strip()
+                lines.append(f"{i}. {title} - {url}")
+            return {"reply": "\n".join(lines)}
         ok_g, gd = _guardrail_check(
             session_id,
             "web_search",
