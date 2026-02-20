@@ -21,8 +21,9 @@ case "$cmd" in
     echo "OPS_ALERTS_OK"
     ;;
   run)
+    ./scripts/total_autoheal.sh
     if ! ./scripts/verify_gateway.sh >/dev/null 2>&1; then
-      notify "Gateway failed health check"
+      notify "Gateway failed health check (unrecovered)"
     fi
     if ! ./scripts/verify_all.sh >/dev/null 2>&1; then
       notify "verify_all failed"
