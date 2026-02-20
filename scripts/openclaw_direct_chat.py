@@ -2729,6 +2729,30 @@ def _extract_allowed_tools(payload: dict) -> set[str]:
 def _maybe_handle_local_action(message: str, allowed_tools: set[str], session_id: str) -> dict | None:
     text = message.lower()
     normalized = _normalize_text(message)
+    # --- ALIAS INTEGRATION (START) ---
+    # Cunningham's Directives:
+    # 1. cunn -> Cunningham
+    # 2. dc -> Molbot Direct Chat
+    # We apply this early so all subsequent logic sees the canonical names.
+    normalized = re.sub(r"\bcunn\b", "Cunningham", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bdc\b", "Molbot Direct Chat", normalized, flags=re.IGNORECASE)
+
+    # Special handler: "open dc" / "abrí dc" / "abrí en dc" -> Activate Molbot Direct Chat window.
+    # This ensures "dc" is treated as a first-class citizen for window activation.
+    if "molbot direct chat" in normalized and any(k in normalized for k in ("abr", "open", "activ", "foc", "ir a")):
+        # Cunningham's Mother Rule: STRICT WORKSPACE ISOLATION.
+        # Only look in the current workspace. Never look globally.
+        desk = _wmctrl_current_desktop()
+        if desk is not None:
+            wins = _wmctrl_windows_for_desktop(desk)
+            for wid, _pid, title in wins:
+                if "molbot direct chat" in title.lower():
+                    _xdotool_command(["windowactivate", wid], timeout=2.5)
+                    return {"reply": "Listo: activé Molbot Direct Chat."}
+        
+        return {"reply": "No encontré 'Molbot Direct Chat' en este workspace. Por reglas de aislamiento, no buscaré en otros escritorios. Si querés una nueva instancia, decí 'open gemini'."}
+    # --- ALIAS INTEGRATION (END) ---
+
     shadow_explicit = any(k in normalized for k in ("shadow", "experimental", "modo shadow"))
 
     if (

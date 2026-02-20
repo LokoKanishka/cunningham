@@ -57,19 +57,7 @@ def _wmctrl_current_desktop() -> int | None:
     return None
 
 
-def _wmctrl_move_to_desktop(win_id: str, desktop_idx: int) -> bool:
-    if not shutil.which("wmctrl"):
-        return False
-    try:
-        subprocess.run(
-            ["wmctrl", "-i", "-r", win_id, "-t", str(desktop_idx)],
-            timeout=3,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        return True
-    except Exception:
-        return False
+
 
 
 def _opened_windows_load() -> dict:
@@ -205,7 +193,7 @@ def open_desktop_item(name_hint: str, session_id: str) -> dict:
         return {"ok": False, "error": "No encontré xdg-open en el sistema (no puedo abrir archivos)."}
 
     before = _wmctrl_list()
-    target_desktop = _wmctrl_current_desktop()
+
     try:
         if chosen.is_dir() and shutil.which("nautilus"):
             subprocess.Popen(["nautilus", "--new-window", str(chosen)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
@@ -235,8 +223,7 @@ def open_desktop_item(name_hint: str, session_id: str) -> dict:
             record_ids = [new_ids[0]]
 
         for wid in record_ids:
-            if target_desktop is not None:
-                _wmctrl_move_to_desktop(wid, target_desktop)
+
             opened_items.append(
                 {
                     "id": str(uuid.uuid4()),
