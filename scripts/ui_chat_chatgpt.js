@@ -17,11 +17,12 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const { humanCheck, humanType } = require("./playwright_human_utils");
+const { typeHuman } = require("./ui_human_helpers");
 
 async function ensureCheckbox(page, labelText, checked) {
   const loc = page.getByLabel(labelText, { exact: true });
-  await humanCheck(page, loc, checked, { name: labelText });
+  if (checked) await loc.check({ timeout: 2000 });
+  else await loc.uncheck({ timeout: 2000 });
 }
 
 async function clickNewSession(page) {
@@ -34,7 +35,7 @@ async function sendAndWait(page, text) {
   const beforeAssistant = await chat.locator(".msg.assistant").count();
 
   const input = page.getByRole("textbox", { name: "Escribi en lenguaje natural..." });
-  await humanType(page, input, text, { name: "chat_input" });
+  await typeHuman(page, input, text, { delayMs: 35, retries: 2, tag: "chat_input" });
   await page.getByRole("button", { name: "Enviar" }).click();
 
   await page.waitForFunction(

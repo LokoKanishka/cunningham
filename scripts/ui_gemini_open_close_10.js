@@ -22,11 +22,12 @@ const COMMANDS = [
   { kind: "close", text: "por favor cerrá las ventanas web que abriste" },
 ];
 
-const { humanCheck, humanType } = require("./playwright_human_utils");
+const { typeHuman } = require("./ui_human_helpers");
 
 async function ensureCheckbox(page, labelText, checked) {
   const loc = page.getByLabel(labelText, { exact: true });
-  await humanCheck(page, loc, checked, { name: labelText });
+  if (checked) await loc.check({ timeout: 5000 });
+  else await loc.uncheck({ timeout: 5000 });
 }
 
 async function clickNewSession(page) {
@@ -38,7 +39,7 @@ async function sendAndWait(page, text) {
   const chat = page.locator("#chat");
   const beforeAssistant = await chat.locator(".msg.assistant").count();
   const input = page.getByRole("textbox", { name: "Escribi en lenguaje natural..." });
-  await humanType(page, input, text, { name: "gemini_input" });
+  await typeHuman(page, input, text, { delayMs: 23, retries: 1, tag: "gemini_open_close" });
   await page.getByRole("button", { name: "Enviar" }).click();
 
   await page.waitForFunction(

@@ -18,11 +18,15 @@ const OPEN_COMMANDS = [
   "abrí firefox https://news.ycombinator.com/",
 ];
 
-const { humanCheck, humanType } = require("./playwright_human_utils");
+const { typeHuman } = require("./ui_human_helpers");
 
 async function ensureCheckbox(page, labelText, checked) {
   const loc = page.getByLabel(labelText, { exact: true });
-  await humanCheck(page, loc, checked, { name: labelText });
+  if (checked) {
+    await loc.check({ timeout: 5000 });
+  } else {
+    await loc.uncheck({ timeout: 5000 });
+  }
 }
 
 async function sendAndWait(page, text) {
@@ -30,7 +34,7 @@ async function sendAndWait(page, text) {
   const beforeAssistant = await chat.locator(".msg.assistant").count();
 
   const input = page.getByRole("textbox", { name: "Escribi en lenguaje natural..." });
-  await humanType(page, input, text, { name: "stress_input" });
+  await typeHuman(page, input, text, { delayMs: 45, retries: 1, tag: "stress_direct_chat" });
   await page.getByRole("button", { name: "Enviar" }).click();
 
   // In non-stream mode, assistant reply is appended as a full message.
