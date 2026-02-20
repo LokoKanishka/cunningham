@@ -118,3 +118,9 @@
 2. `./scripts/webhook_smoke.sh`
 3. `./scripts/n8n_stress_matrix.sh`
 4. `./scripts/dr_drill.sh`
+
+## Políticas de Arquitectura (v0.3)
+1. No dependencias externas no declaradas para servicios systemd (ej. `tenacity`).
+2. Uso estricto de AST (Abstract Syntax Tree) para validación en `antigravity/app.py`.
+3. Todo tráfico IPC debe cumplir los contratos Pydantic antes de tocar la lógica de negocio.
+4. Sincronización completa: discrepancia corregida entre `main` (producción) y `amarillo` (worktree de desarrollo).
