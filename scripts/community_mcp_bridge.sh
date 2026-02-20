@@ -31,16 +31,16 @@ setup_bridge() {
     mcporter config remove "$name" >/dev/null 2>&1 || true
   done
 
-  mcporter config add community-office-word --command uvx --arg office-word-mcp-server --scope home
-  mcporter config add community-arxiv --command uvx --arg arxiv-mcp-server --scope home
-  mcporter config add community-browserbase --command npx --arg -y --arg @browserbasehq/mcp-server-browserbase --scope home
+  mcporter config add community-office-word --command ./scripts/mcp_sandbox_wrapper.sh --arg uvx --arg office-word-mcp-server --scope home
+  mcporter config add community-arxiv --command ./scripts/mcp_sandbox_wrapper.sh --arg uvx --arg arxiv-mcp-server --scope home
+  mcporter config add community-browserbase --command ./scripts/mcp_sandbox_wrapper.sh --arg npx --arg -y --arg @browserbasehq/mcp-server-browserbase --scope home
   mcporter config add community-cloudflare --url https://docs.mcp.cloudflare.com/mcp --scope home
   mcporter config add community-exa --url https://mcp.exa.ai/mcp --scope home
-  mcporter config add community-firecrawl --command npx --arg -y --arg firecrawl-mcp --env FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY:-} --scope home
+  mcporter config add community-firecrawl --command ./scripts/mcp_sandbox_wrapper.sh --arg npx --arg -y --arg firecrawl-mcp --env FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY:-} --scope home
   mcporter config add community-github --url https://api.githubcopilot.com/mcp/ --scope home
-  mcporter config add community-excel --command uvx --arg excel-mcp-server --arg stdio --scope home
-  mcporter config add community-n8n --command npx --arg -y --arg @leonardsellem/n8n-mcp-server --env N8N_API_URL=${N8N_API_URL:-} --env N8N_API_KEY=${N8N_API_KEY:-} --scope home
-  mcporter config add community-notion --command npx --arg -y --arg @notionhq/notion-mcp-server --env NOTION_API_KEY=${NOTION_API_KEY:-} --scope home
+  mcporter config add community-excel --command ./scripts/mcp_sandbox_wrapper.sh --arg uvx --arg excel-mcp-server --arg stdio --scope home
+  mcporter config add community-n8n --command ./scripts/mcp_sandbox_wrapper.sh --arg npx --arg -y --arg @leonardsellem/n8n-mcp-server --env N8N_API_URL=${N8N_API_URL:-} --env N8N_API_KEY=${N8N_API_KEY:-} --scope home
+  mcporter config add community-notion --command ./scripts/mcp_sandbox_wrapper.sh --arg npx --arg -y --arg @notionhq/notion-mcp-server --env NOTION_API_KEY=${NOTION_API_KEY:-} --scope home
 
   echo "COMMUNITY_MCP_BRIDGE_SETUP_OK count=10"
 }
