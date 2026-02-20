@@ -33,12 +33,25 @@ case "$cmd" in
   ask-with-fallback)
     msg="${*:-}"
     [ -n "$msg" ] || { echo "usage: $0 ask-with-fallback <message>" >&2; exit 2; }
+    
+    # Save original model so we can restore it cleanly
+    orig_model="$(openclaw models status | grep -E '^Configured models' | awk -F': ' '{print $2}' | tr -d ' ' || true)"
+    trap '
+      if [ -n "$orig_model" ]; then
+        openclaw models set "$orig_model" >/dev/null 2>&1 || true
+        openclaw agent --agent main --message "/new $orig_model" --timeout 90 >/dev/null 2>&1 || true
+      fi
+    ' EXIT
+
     m="$(choose_model "$msg")"
     openclaw models set "$m" >/dev/null 2>&1 || true
     openclaw agent --agent main --message "/new $m" --timeout 90 >/dev/null 2>&1 || true
     out="$(run_agent "$msg")"
-    if printf "%s" "$out" | grep -Eiq 'quota|rate limit|temporarily unavailable|429'; then
+    
+    # Graceful Degradation: If output is empty or contains an error/rate limit, fallback
+    if [ -z "$out" ] || printf "%s" "$out" | grep -Eiq 'quota|rate limit|temporarily unavailable|429|failed|error'; then
       if command -v ollama >/dev/null 2>&1; then
+        echo "WARN_FALLBACK: Model $m failed or saturated. Swapping to local ollama/gpt-oss:20b fallback without breaking UI." >&2
         openclaw models set ollama/gpt-oss:20b >/dev/null 2>&1 || true
         openclaw agent --agent main --message '/new ollama/gpt-oss:20b' --timeout 90 >/dev/null 2>&1 || true
         out="$(run_agent "$msg")"
