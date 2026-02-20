@@ -22,7 +22,7 @@ if printf "%s\n" "$listener" | grep -q 'clawdbot-gatewa'; then
   fail "port 18789 is owned by clawdbot-gateway; expected openclaw-gateway"
 fi
 
-if false; then
+if ! openclaw health >/dev/null 2>&1; then
   echo "gateway unreachable; starting foreground gateway in background..." >&2
   nohup openclaw gateway --force > "$HOME/.openclaw/gateway-foreground.log" 2>&1 &
 

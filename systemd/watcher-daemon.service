@@ -1,0 +1,16 @@
+[Unit]
+Description=Cunningham Watcher Daemon (Autonomous Goal Executor)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/lucy-ubuntu/Escritorio/cunningham-naranja
+ExecStart=/home/lucy-ubuntu/Escritorio/cunningham-naranja/scripts/watcher_daemon.sh /home/lucy-ubuntu/Escritorio/cunningham-naranja
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cunningham-watcher
+
+[Install]
+WantedBy=default.target
