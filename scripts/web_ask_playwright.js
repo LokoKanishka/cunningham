@@ -5,6 +5,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { chromium } = require("playwright");
+const { humanType } = require("./playwright_human_utils");
 
 const SITE_CONFIG = {
   chatgpt: {
@@ -262,13 +263,8 @@ async function ensureChatSurfaceReady(page, cfg, timeoutMs) {
 }
 
 async function writePrompt(page, inputLocator, prompt) {
-  await inputLocator.scrollIntoViewIfNeeded();
-  await inputLocator.click({ force: true, delay: randInt(20, 70) });
-  await page.keyboard.press("Control+A");
-  await page.keyboard.press("Backspace");
-
-  await page.keyboard.type(prompt, { delay: randInt(22, 48) });
-  return;
+  // Use robust human typing with retries and diagnostics
+  await humanType(page, inputLocator, prompt, { name: 'prompt_input', delay: randInt(22, 48) });
 }
 
 async function sendPrompt(page, cfg) {

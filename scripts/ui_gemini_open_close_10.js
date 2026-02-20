@@ -22,11 +22,11 @@ const COMMANDS = [
   { kind: "close", text: "por favor cerrá las ventanas web que abriste" },
 ];
 
+const { humanCheck, humanType } = require("./playwright_human_utils");
+
 async function ensureCheckbox(page, labelText, checked) {
   const loc = page.getByLabel(labelText, { exact: true });
-  if ((await loc.isChecked()) !== checked) {
-    await loc.click();
-  }
+  await humanCheck(page, loc, checked, { name: labelText });
 }
 
 async function clickNewSession(page) {
@@ -38,11 +38,7 @@ async function sendAndWait(page, text) {
   const chat = page.locator("#chat");
   const beforeAssistant = await chat.locator(".msg.assistant").count();
   const input = page.getByRole("textbox", { name: "Escribi en lenguaje natural..." });
-
-  await input.click({ delay: 40 });
-  await input.press("Control+A");
-  await input.press("Backspace");
-  await input.type(text, { delay: 23 });
+  await humanType(page, input, text, { name: "gemini_input" });
   await page.getByRole("button", { name: "Enviar" }).click();
 
   await page.waitForFunction(
