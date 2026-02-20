@@ -27,7 +27,7 @@
           "parameters": [
             {
               "name": "model",
-              "value": "gpt-oss:20b"
+              "value": "mistral-uncensored:latest"
             },
             {
               "name": "prompt",

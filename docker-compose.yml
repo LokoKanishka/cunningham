@@ -57,6 +57,7 @@ services:
       - GENERIC_TIMEZONE=America/Argentina/Buenos_Aires
       - N8N_RESTRICT_FILE_ACCESS_TO=/data/lucy_ipc;/home/node/.n8n-files
       - ANTIGRAVITY_URL=http://127.0.0.1:5000
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-dummy_key_for_n8n_eval}
       - LUCY_IPC_INBOX=/data/lucy_ipc/inbox
       - LUCY_IPC_DEADLETTER=/data/lucy_ipc/deadletter
       - NODE_FUNCTION_ALLOW_BUILTIN=fs,path,crypto
@@ -66,6 +67,7 @@ services:
       # (Se puede ajustar PUID/PGID si es necesario, pero host mode simplifica esto)
     volumes:
       - ./data/n8n:/home/node/.n8n
+      - ./data/n8n:/root/.n8n
       - ./workspace:/data/workspace:rw # Intercambio con Antigravity
       - ./ipc:/data/lucy_ipc:rw # RAM Disk para IPC
     healthcheck:
@@ -195,7 +197,7 @@ services:
     network_mode: "host"
     command: [ "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "5100" ]
     environment:
-      - GATEWAY_URL=http://127.0.0.1:5678/webhook/lucy-input
+      - GATEWAY_URL=http://127.0.0.1:5678/webhook/voice-input
       - IPC_ROOT=/data/lucy_ipc
       - REPO_ROOT=/repo
     volumes:

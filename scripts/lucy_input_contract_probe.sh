@@ -30,7 +30,7 @@ p.write_text(p.read_text().replace('__TS__', datetime.now(timezone.utc).isoforma
 PY
 
 HTTP_CODE="$(curl -sS -o "$RES_BODY" -D "$RES_HEADERS" -w '%{http_code}' \
-  -X POST http://127.0.0.1:5678/webhook/lucy-input \
+  -X POST http://127.0.0.1:5678/webhook/voice-input \
   -H 'content-type: application/json' \
   --data-binary "@$REQ")"
 
