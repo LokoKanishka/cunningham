@@ -50,11 +50,16 @@ const envelope = {
 };
 
 const errors = [];
-if (typeof body.kind !== 'string' || !body.kind.trim()) errors.push('kind is required string');
-if (typeof body.source !== 'string' || !body.source.trim()) errors.push('source is required string');
+if (typeof body.kind !== 'string' || body.kind.length < 1 || body.kind.length > 64) errors.push('kind must be string(1..64)');
+if (typeof body.source !== 'string' || body.source.length < 1 || body.source.length > 128) errors.push('source must be string(1..128)');
 if (typeof body.ts !== 'string' || Number.isNaN(Date.parse(body.ts))) errors.push('ts must be RFC3339 date-time');
-if (Object.prototype.hasOwnProperty.call(body, 'text') && typeof body.text !== 'string') errors.push('text must be string');
+if (Object.prototype.hasOwnProperty.call(body, 'text')) {
+  if (typeof body.text !== 'string' || body.text.length < 1 || body.text.length > 20000) {
+    errors.push('text must be string(1..20000)');
+  }
+}
 if (Object.prototype.hasOwnProperty.call(body, 'meta') && !isObject(body.meta)) errors.push('meta must be object');
+if (typeof correlationId !== 'string' || correlationId.length < 8 || correlationId.length > 128) errors.push('correlation_id must be string(8..128)');
 
 const inboxPath = path.join(inboxDir, `${correlationId}.json`);
 const deadletterPath = path.join(deadletterDir, `${correlationId}.json`);

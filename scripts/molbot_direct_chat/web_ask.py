@@ -8,9 +8,10 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
+import asyncio
+import aiohttp
 from urllib.parse import quote_plus
-from urllib.request import Request, urlopen
-from urllib.error import HTTPError, URLError
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from .util import normalize_text, parse_json_object
 
@@ -200,7 +201,12 @@ def _gemini_api_status_from_error(code: int, detail: str) -> str:
     return "runner_error"
 
 
-def _gemini_api_generate_once(
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError))
+)
+async def _gemini_api_generate_once(
     model: str,
     api_key: str,
     contents: list[dict],
@@ -208,34 +214,34 @@ def _gemini_api_generate_once(
 ) -> tuple[bool, str, str]:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     body = {"contents": contents}
-    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
-    req = Request(
-        url=url,
-        data=data,
-        headers={"Content-Type": "application/json; charset=utf-8"},
-        method="POST",
-    )
     timeout_s = max(8.0, float(timeout_ms) / 1000.0)
+
     try:
-        with urlopen(req, timeout=timeout_s) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-    except HTTPError as e:
-        try:
-            detail = e.read().decode("utf-8", errors="replace")
-        except Exception:
-            detail = str(e)
-        status = _gemini_api_status_from_error(int(getattr(e, "code", 0) or 0), detail)
-        return False, status, detail[:800]
-    except URLError as e:
-        return False, "upstream_error", str(e)[:800]
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                json=body,
+                headers={"Content-Type": "application/json; charset=utf-8"},
+                timeout=aiohttp.ClientTimeout(total=timeout_s)
+            ) as resp:
+                if resp.status != 200:
+                    try:
+                        detail = await resp.text()
+                    except Exception:
+                        detail = str(resp.status)
+                    status = _gemini_api_status_from_error(resp.status, detail)
+                    return False, status, detail[:800]
+                
+                try:
+                    payload = await resp.json()
+                    # Assign raw for logic downstream if needed, but here we process payload directly
+                except Exception:
+                    raw_text = await resp.text()
+                    return False, "invalid_output", raw_text[:800]
     except Exception as e:
         return False, "runner_error", str(e)[:800]
-
-    try:
-        payload = json.loads(raw)
-    except Exception:
-        return False, "invalid_output", raw[:800]
-
+    
+    # Proceed with payload processing (unchanged from original structure mostly)
     if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
         err = payload.get("error", {})
         code = int(err.get("code", 0) or 0)
@@ -253,7 +259,7 @@ def _gemini_api_generate_once(
     return False, "invalid_output", json.dumps(payload, ensure_ascii=False)[:800]
 
 
-def _run_gemini_api(prompt: str, timeout_ms: int = 60000, followups: list[str] | None = None) -> dict:
+async def _run_gemini_api(prompt: str, timeout_ms: int = 60000, followups: list[str] | None = None) -> dict:
     started = time.time()
     if not _gemini_api_enabled():
         return {
@@ -336,7 +342,7 @@ def _run_gemini_api(prompt: str, timeout_ms: int = 60000, followups: list[str] |
 
         for p in prompts:
             contents.append({"role": "user", "parts": [{"text": p}]})
-            ok, status, out = _gemini_api_generate_once(model=model, api_key=api_key, contents=contents, timeout_ms=timeout_ms)
+            ok, status, out = await _gemini_api_generate_once(model=model, api_key=api_key, contents=contents, timeout_ms=timeout_ms)
             if not ok:
                 failed = True
                 fail_status = status
@@ -625,11 +631,11 @@ def bootstrap_login(site_key: str) -> tuple[bool, str]:
         return False, str(e)
 
 
-def run_web_ask(site_key: str, prompt: str, timeout_ms: int = 60000, followups: list[str] | None = None) -> dict:
+async def run_web_ask(site_key: str, prompt: str, timeout_ms: int = 60000, followups: list[str] | None = None) -> dict:
     started = time.time()
     # Preferred stable path for Gemini: official API (free tier when available).
     if site_key == "gemini":
-        api_result = _run_gemini_api(prompt=prompt, timeout_ms=timeout_ms, followups=followups)
+        api_result = await _run_gemini_api(prompt=prompt, timeout_ms=timeout_ms, followups=followups)
         # Fallback to web UI automation only when API is not configured/disabled.
         if str(api_result.get("status", "")) not in ("missing_api_key", "api_disabled"):
             return api_result

@@ -56,10 +56,16 @@ def _effective_timeout(requested: Optional[int]) -> int:
     return min(req, MAX_TIMEOUT_S)
 
 
+
+from antigravity.sandbox_guard import check_code, SecurityViolation
+
 def _guard_code(code: str) -> None:
-    # Minimal guardrail: reject obviously destructive commands.
-    if "rm -rf /" in code:
-        raise HTTPException(status_code=400, detail="Dangerous command rejected.")
+    try:
+        check_code(code)
+    except SecurityViolation as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except SyntaxError as e:
+        raise HTTPException(status_code=400, detail=f"SyntaxError: {e}")
 
 
 def _collect_artifacts(run_dir: Path) -> List[str]:
