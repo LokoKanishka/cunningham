@@ -43,6 +43,10 @@ def _wmctrl_list() -> dict[str, str]:
 
 
 
+
+
+
+
 def _opened_windows_load() -> dict:
     OPENED_WINDOWS_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:

@@ -20,10 +20,8 @@ const OPEN_COMMANDS = [
 
 async function ensureCheckbox(page, labelText, checked) {
   const loc = page.getByLabel(labelText, { exact: true });
-  if (checked) {
-    await loc.check({ timeout: 5000 });
-  } else {
-    await loc.uncheck({ timeout: 5000 });
+  if ((await loc.isChecked()) !== checked) {
+    await loc.click();
   }
 }
 

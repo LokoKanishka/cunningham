@@ -20,8 +20,9 @@ const QUESTIONS = [
 
 async function ensureCheckbox(page, labelText, checked) {
   const loc = page.getByLabel(labelText, { exact: true });
-  if (checked) await loc.check({ timeout: 5000 });
-  else await loc.uncheck({ timeout: 5000 });
+  if ((await loc.isChecked()) !== checked) {
+    await loc.click();
+  }
 }
 
 async function clickNewSession(page) {
@@ -35,7 +36,8 @@ async function sendAndWait(page, text) {
 
   const input = page.getByRole("textbox", { name: "Escribi en lenguaje natural..." });
   await input.click();
-  await input.fill(text);
+  await input.click();
+  await input.pressSequentially(text, { delay: 35 });
   await page.getByRole("button", { name: "Enviar" }).click();
 
   await page.waitForFunction(

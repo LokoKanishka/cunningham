@@ -16,6 +16,38 @@ Laboratorio desde cero para Moltbot upstream + modelos externos + cambio de mode
 - UI local opcional del stack (Dockge): `docs/INTERFAZ_STACK_DOCKGE.md`
 - UI funcional del Gateway (Lucy Panel): `docs/LUCY_UI_PANEL.md`
 
+## Backup espejo Git (offline-first y seguro)
+- Modo por defecto: `offline-only`.
+- Cada ejecución crea un mirror bare nuevo en: `./backups/git-mirror/<name>/<YYYYmmdd_HHMMSS_mmm>.git`.
+- Anti-overwrite: si el destino ya existe, falla.
+- Concurrencia: usa lockfile para evitar ejecuciones simultáneas.
+- `--dry-run`: no crea archivos ni hace push; solo imprime el plan.
+- `--push-url` está bloqueado por defecto. Para habilitar push se requieren dos flags:
+  - `--allow-push`
+  - `--confirm-push YES_PUSH_MIRROR`
+
+Ejemplos seguros:
+
+```bash
+# Ver plan sin tocar disco/remotos
+./scripts/git_mirror_backup.sh --dry-run
+
+# Crear solo mirror local (recomendado)
+./scripts/git_mirror_backup.sh
+
+# Push espejo explícito (peligroso si destino equivocado)
+./scripts/git_mirror_backup.sh \
+  --push-url https://github.com/tu-user/tu-repo-espejo.git \
+  --allow-push \
+  --confirm-push YES_PUSH_MIRROR
+```
+
+Guardrails:
+- Nunca uses `--push-url` apuntando al repo origen.
+- Evitá incluir tokens en URLs; preferí credenciales del helper de Git/SSH.
+- Revisá siempre `--dry-run` antes de habilitar push.
+- Modo “sin pagar / sin tokens / sin push involuntario”: usá solo mirror local (sin `--push-url`) y, si querés 100% local, `--source-url /ruta/al/repo/.git`.
+
 ## Stack autonomía+visión (10)
 - Documento: `DOCS/AUTONOMY_VISION_STACK.md`
 - Verificación del stack: `./scripts/verify_stack10.sh`

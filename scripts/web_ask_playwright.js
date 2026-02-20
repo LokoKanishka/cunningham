@@ -278,12 +278,8 @@ async function writePrompt(page, inputLocator, prompt) {
   await page.keyboard.press("Control+A");
   await page.keyboard.press("Backspace");
 
-  try {
-    await page.keyboard.type(prompt, { delay: randInt(22, 48) });
-    return;
-  } catch {
-    await inputLocator.fill(prompt);
-  }
+  await page.keyboard.type(prompt, { delay: randInt(22, 48) });
+  return;
 }
 
 async function sendPrompt(page, cfg) {
