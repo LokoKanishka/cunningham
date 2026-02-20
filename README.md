@@ -12,6 +12,7 @@ Laboratorio desde cero para Moltbot upstream + modelos externos + cambio de mode
 - Botón rojo: `./scripts/verify_all.sh`
 - Modo amplio (más capacidad de tools): `./scripts/mode_full.sh`
 - Modo seguro (allowlist reducida): `./scripts/mode_safe.sh`
+- Backup espejo Git: `./scripts/git_mirror_backup.sh --help`
 - UI local opcional del stack (Dockge): `docs/INTERFAZ_STACK_DOCKGE.md`
 - UI funcional del Gateway (Lucy Panel): `docs/LUCY_UI_PANEL.md`
 
@@ -64,4 +65,3 @@ journalctl --user -u openclaw-gateway.service -n 200 --no-pager
 Para evitar que el modelo ejecute comandos arbitrarios, `exec` queda denegado por defecto
 en `~/.openclaw/openclaw.json` (deny: `exec`, `bash`; allow: sin `exec`).
 <!-- DC_OPS_SECURITY_END -->
-
