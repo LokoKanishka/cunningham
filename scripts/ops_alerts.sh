@@ -35,12 +35,18 @@ case "$cmd" in
     (crontab -l 2>/dev/null | grep -v 'scripts/ops_alerts.sh run' ; echo "$line") | crontab -
     echo "OPS_ALERTS_CRON_INSTALLED"
     ;;
-  cron-remove)
-    (crontab -l 2>/dev/null | grep -v 'scripts/ops_alerts.sh run') | crontab - || true
-    echo "OPS_ALERTS_CRON_REMOVED"
+  chaos-cron-install)
+    line="*/15 * * * * cd $PWD && CHAOS_ENABLED=true ./scripts/chaos_cunningham.sh >> DOCS/RUNS/chaos_cron.log 2>&1"
+    (crontab -l 2>/dev/null | grep -v 'scripts/chaos_cunningham.sh' ; echo "$line") | crontab -
+    echo "CHAOS_MONKEY_CRON_INSTALLED"
+    ;;
+  chaos-cron-remove)
+    (crontab -l 2>/dev/null | grep -v 'scripts/chaos_cunningham.sh') | crontab - || true
+    echo "CHAOS_MONKEY_CRON_REMOVED"
     ;;
   *)
-    echo "usage: $0 {check|run|cron-install|cron-remove}" >&2
+    echo "usage: $0 {check|run|cron-install|cron-remove|chaos-cron-install|chaos-cron-remove}" >&2
     exit 2
     ;;
+
 esac
