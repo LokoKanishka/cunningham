@@ -29,4 +29,7 @@ echo "== verify_zero_state ==" >&2
 echo "== verify_ui_vision_assert ==" >&2
 ./scripts/ui_vision_assert.sh 1>&2
 
+echo "== verify_n8n_orchestration ==" >&2
+./scripts/n8n_stress.sh >/dev/null 2>&1
+
 echo "ALL_OK" >&2

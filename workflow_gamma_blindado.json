@@ -43,7 +43,9 @@
             }
           ]
         },
-        "options": {}
+        "options": {
+          "timeout": 30000
+        }
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
@@ -111,7 +113,7 @@
           "string": [
             {
               "name": "message",
-              "value": "={{ $json.command ? ('EXEC: ' + $json.command.replace(/\\s*&\\s*$/, '') + ' >/dev/null 2>&1 &') : 'EXEC:' }}"
+              "value": "={{ $json.command ? ('EXEC: /home/lucy-ubuntu/Escritorio/cunningham-verde/scripts/mcp_sandbox_wrapper.sh bash -c \\'' + $json.command.replace(/'/g, \"'\\\\''\") + '\\' >/dev/null 2>&1 &') : 'EXEC:' }}"
             }
           ]
         },
@@ -196,7 +198,9 @@
         "contentType": "json",
         "specifyBody": "json",
         "jsonBody": "={{ {\"contents\":[{\"parts\":[{\"text\": $node[\"Oido (Webhook)\"].json.body.text }]}]} }}",
-        "options": {}
+        "options": {
+          "timeout": 15000
+        }
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
