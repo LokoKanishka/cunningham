@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 export PATH="$HOME/.openclaw/bin:$PATH"
+trap 'kill $(jobs -p) 2>/dev/null || true' EXIT
 
 strict=0
 if [ "${1:-}" = "--strict" ]; then
