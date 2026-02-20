@@ -102,49 +102,8 @@ fi
   --class=web_ask_shadow \
   "$URL" >/dev/null 2>&1 &
 
-if [[ "${WEB_ASK_ALLOW_WORKSPACE_MOVE:-0}" == "1" ]] && command -v wmctrl >/dev/null 2>&1 && [[ -n "$target_desktop" ]]; then
-  # Prefer moving windows belonging to the shadow profile process(es).
-  for _ in {1..80}; do
-    sleep 0.1
-    shadow_pids_after=""
-    if command -v pgrep >/dev/null 2>&1; then
-      shadow_pids_after="$(pgrep -f -- "--user-data-dir=$DST_ROOT" || true)"
-    fi
-    shadow_pids_new="$(comm -13 <(printf "%s\n" "$shadow_pids_before" | tr ' ' '\n' | sed '/^$/d' | sort -n) <(printf "%s\n" "$shadow_pids_after" | tr ' ' '\n' | sed '/^$/d' | sort -n) || true)"
-    shadow_pids_use="$shadow_pids_new"
-    if [[ -z "$shadow_pids_use" ]]; then
-      shadow_pids_use="$shadow_pids_after"
-    fi
+# Workspace movement logic removed per Proyecto Verde V1
 
-    moved_any="0"
-    if [[ -n "$shadow_pids_use" ]]; then
-      while IFS= read -r pid; do
-        [[ -z "$pid" ]] && continue
-        # wmctrl -lp: window_id desktop pid host title...
-        while IFS= read -r wid; do
-          [[ -z "$wid" ]] && continue
-          wmctrl -i -r "$wid" -t "$target_desktop" >/dev/null 2>&1 || true
-          wmctrl -i -a "$wid" >/dev/null 2>&1 || true
-          moved_any="1"
-        done < <(wmctrl -lp | awk -v pid="$pid" '$3==pid {print $1}')
-      done < <(printf "%s\n" "$shadow_pids_use" | tr ' ' '\n' | sed '/^$/d' | sort -n | uniq)
-    fi
-
-    # Fallback: match by WM_CLASS in case Chrome process mapping is delayed/hidden.
-    if [[ "$moved_any" != "1" ]]; then
-      while IFS= read -r wid; do
-        [[ -z "$wid" ]] && continue
-        wmctrl -i -r "$wid" -t "$target_desktop" >/dev/null 2>&1 || true
-        wmctrl -i -a "$wid" >/dev/null 2>&1 || true
-        moved_any="1"
-      done < <(wmctrl -lx | awk 'tolower($3) ~ /web_ask_shadow/ {print $1}')
-    fi
-
-    if [[ "$moved_any" == "1" ]]; then
-      break
-    fi
-  done
-fi
 
 echo "WEB_ASK_BOOTSTRAP_OK site=$SITE profile_name=$PROFILE_NAME profile_dir=$PROFILE_DIR url=$URL"
 echo "Iniciá sesión en esa ventana (si hace falta) y luego cerrala."
