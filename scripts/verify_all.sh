@@ -26,4 +26,7 @@ echo "== verify_community_mcp ==" >&2
 echo "== verify_zero_state ==" >&2
 ./scripts/verify_zero_state.sh 1>&2
 
+echo "== verify_ui_vision_assert ==" >&2
+./scripts/ui_vision_assert.sh 1>&2
+
 echo "ALL_OK" >&2
