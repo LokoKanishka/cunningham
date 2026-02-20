@@ -20,6 +20,10 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function sanitize(text) {
+  return String(text || "").replace(/(?:key|token|auth|session|pass|pwd)=[^&\s]+/gi, "$1=[REDACTED]");
+}
+
 const RECIPES = [
   "preguntale a chatgpt: receta de budin de pistacho sin gluten para celiacos. dame ingredientes y pasos.",
   "preguntale a chatgpt: receta rapida de tortillas de maiz caseras (sin prensa), con tips.",
@@ -157,7 +161,7 @@ async function main() {
     if (consoleErrors.length) {
       fs.mkdirSync(OUT_DIR, { recursive: true });
       const logPath = path.join(OUT_DIR, "ui_recipes_convos_console_errors.log");
-      fs.writeFileSync(logPath, consoleErrors.join("\n"), "utf-8");
+      fs.writeFileSync(logPath, sanitize(consoleErrors.join("\n")), "utf-8");
       console.error(`Console had ${consoleErrors.length} error(s). Saved: ${logPath}`);
     }
   } finally {
