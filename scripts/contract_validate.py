@@ -5,6 +5,16 @@ import json
 import sys
 from pathlib import Path
 
+# Validating contract_validate.py self-import for Antigravity
+try:
+    _ROOT = Path(__file__).resolve().parent.parent
+    if str(_ROOT) not in sys.path:
+        sys.path.insert(0, str(_ROOT))
+    from antigravity.contracts import LucyInput, LucyOutput, LucyAck
+    _HAS_ANTIGRAVITY = True
+except ImportError:
+    _HAS_ANTIGRAVITY = False
+
 
 def main() -> int:
     if len(sys.argv) != 3:
@@ -26,7 +36,24 @@ def main() -> int:
 
     validator = jsonschema.Draft202012Validator(schema)
     errors = sorted(validator.iter_errors(instance), key=lambda e: e.path)
-    if errors:
+
+    # Secondary validation using Pydantic models if available (Strict Mode)
+    pydantic_error = None
+    if _HAS_ANTIGRAVITY:
+        model_map = {
+            "lucy_input_v1.schema.json": LucyInput,
+            "lucy_output_v1.schema.json": LucyOutput,
+            "lucy_ack_v1.schema.json": LucyAck,
+        }
+        model_cls = model_map.get(schema_path.name)
+        if model_cls:
+            try:
+                model_cls(**instance)
+            except Exception as e:
+                pydantic_error = str(e)
+                print(f"PYDANTIC_VALIDATION=FAIL model={model_cls.__name__}\n{e}", file=sys.stderr)
+
+    if errors or pydantic_error:
         print("VALIDATION=FAIL")
         for err in errors:
             p = "/".join(str(x) for x in err.path)

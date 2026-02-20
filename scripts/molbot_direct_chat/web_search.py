@@ -3,7 +3,13 @@ from __future__ import annotations
 import json
 import re
 import urllib.parse
-import urllib.request
+import json
+import re
+import urllib.parse
+import aiohttp
+import asyncio
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
 
 
 SEARXNG_URL = "http://127.0.0.1:8080/search"
@@ -108,7 +114,12 @@ def extract_web_search_request(message: str) -> tuple[str, str | None] | None:
     return None
 
 
-def searxng_search(
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError))
+)
+async def searxng_search(
     query: str, *, site_key: str | None = None, max_results: int = 6, timeout_s: int = 12
 ) -> dict:
     """
@@ -116,35 +127,45 @@ def searxng_search(
     """
     q = (query or "").strip()
     if not q:
-        return {"ok": False, "status": "empty_query", "query": "", "results": [], "error": "empty_query"}
+        return {"ok": False, "status": "empty_query", "query": "", "results": [], "error": "empty_query", "site_key": site_key}
 
     domain = SITE_DOMAIN_FILTERS.get(str(site_key or "").strip().lower(), "")
     q_eff = f"{q} site:{domain}".strip() if domain else q
-    data = urllib.parse.urlencode({"q": q_eff, "format": "json"}).encode("utf-8")
-    req = urllib.request.Request(
-        SEARXNG_URL,
-        data=data,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        method="POST",
-    )
+    
+    # SearXNG POST data
+    data = {"q": q_eff, "format": "json"}
+    
     try:
-        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                SEARXNG_URL,
+                data=data,
+                timeout=aiohttp.ClientTimeout(total=timeout_s)
+            ) as resp:
+                if resp.status >= 400:
+                    return {
+                        "ok": False,
+                        "status": "upstream_error",
+                        "query": q,
+                        "results": [],
+                        "error": f"HTTP {resp.status}",
+                        "site_key": site_key
+                    }
+                try:
+                    payload = await resp.json()
+                except Exception as e:
+                     raw = await resp.text()
+                     return {
+                        "ok": False,
+                        "status": "invalid_json",
+                        "query": q,
+                        "results": [],
+                        "error": f"{e}",
+                        "raw": raw[:600],
+                        "site_key": site_key,
+                    }
     except Exception as e:
         return {"ok": False, "status": "network_error", "query": q, "results": [], "error": str(e), "site_key": site_key}
-
-    try:
-        payload = json.loads(raw)
-    except Exception as e:
-        return {
-            "ok": False,
-            "status": "invalid_json",
-            "query": q,
-            "results": [],
-            "error": f"{e}",
-            "raw": raw[:600],
-            "site_key": site_key,
-        }
 
     results = payload.get("results", [])
     if not isinstance(results, list):
