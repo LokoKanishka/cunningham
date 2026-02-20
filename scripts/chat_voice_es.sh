@@ -4,19 +4,19 @@ export PATH="$HOME/.openclaw/bin:$PATH"
 
 msg="${*:-Decime un resumen breve del estado del sistema.}"
 
-raw="$(openclaw agent --agent main --json --timeout 120 --message "Respondé en castellano: $msg" 2>&1 || true)"
+# Usamos web_ask.py para garantizar flujo "Modo Humano" vía Playwright/DOM
+raw="$(python3 scripts/molbot_direct_chat/web_ask.py --site gemini --prompt "Respondé en castellano: $msg" --headless 2>&1 || true)"
+
 text="$(printf "%s" "$raw" | node -e '
 const fs=require("fs");
 const raw=fs.readFileSync(0,"utf8");
 const i=raw.indexOf("{");
 const j=raw.lastIndexOf("}");
-if(i<0||j<=i){ console.log("No pude parsear respuesta."); process.exit(0); }
+if(i<0||j<=i){ console.log("No pude parsear respuesta (UI error)."); process.exit(0); }
 try{
   const o=JSON.parse(raw.slice(i,j+1));
-  const p=Array.isArray(o?.result?.payloads)?o.result.payloads:(Array.isArray(o?.payloads)?o.payloads:[]);
-  const t=p.map(x=>String(x?.text||"")).join("\n").trim();
-  console.log(t||"(sin texto)");
-}catch{ console.log("No pude parsear respuesta."); }
+  console.log(o.text || o.evidence || "(sin texto)");
+}catch{ console.log("No pude parsear respuesta (JSON error)."); }
 ')"
 
 echo "$text"
