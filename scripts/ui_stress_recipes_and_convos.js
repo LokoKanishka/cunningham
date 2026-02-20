@@ -58,7 +58,7 @@ async function sendAndWait(page, text) {
 
   const input = page.getByRole("textbox", { name: "Escribi en lenguaje natural..." });
   await input.click();
-  await input.fill(text);
+  await input.pressSequentially(text, { delay: 50 });
   await page.getByRole("button", { name: "Enviar" }).click();
 
   await page.waitForFunction(
