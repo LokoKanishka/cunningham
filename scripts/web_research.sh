@@ -16,7 +16,7 @@ case "$cmd" in
     q="${*:-openclaw plugins security best practices}"
     ts="$(date +%Y%m%d_%H%M%S)"
     out="DOCS/RUNS/web_research_${ts}.md"
-    raw="$(openclaw agent --agent main --json --timeout 120 \
+    raw="$(./scripts/display_isolation.sh run headless -- openclaw agent --agent main --json --timeout 120 \
       --message "Usa web_search para buscar: $q. Luego usa web_fetch en 2 resultados y devolve un resumen breve con fuentes en markdown." \
       2>&1 || true)"
 
