@@ -20,10 +20,8 @@ const OPEN_COMMANDS = [
 
 async function ensureCheckbox(page, labelText, checked) {
   const loc = page.getByLabel(labelText, { exact: true });
-  if (checked) {
-    await loc.check({ timeout: 5000 });
-  } else {
-    await loc.uncheck({ timeout: 5000 });
+  if ((await loc.isChecked()) !== checked) {
+    await loc.click();
   }
 }
 
@@ -33,7 +31,8 @@ async function sendAndWait(page, text) {
 
   const input = page.getByRole("textbox", { name: "Escribi en lenguaje natural..." });
   await input.click();
-  await input.fill(text);
+  await input.click();
+  await input.pressSequentially(text, { delay: 25 });
   await page.getByRole("button", { name: "Enviar" }).click();
 
   // In non-stream mode, assistant reply is appended as a full message.

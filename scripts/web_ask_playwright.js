@@ -176,12 +176,12 @@ async function detectHumanVerification(page) {
   try {
     const title = await page.title();
     if (/captcha|cloudflare|turnstile/i.test(String(title || ""))) return true;
-  } catch {}
+  } catch { }
 
   try {
     const url = page.url();
     if (/challenges\\.cloudflare\\.com/i.test(String(url || ""))) return true;
-  } catch {}
+  } catch { }
 
   try {
     const frames = page.frames();
@@ -189,7 +189,7 @@ async function detectHumanVerification(page) {
       const furl = String(fr.url() || "");
       if (/challenges\.cloudflare\.com|turnstile|captcha|recaptcha/i.test(furl)) return true;
     }
-  } catch {}
+  } catch { }
 
   try {
     const bodyText = await page.evaluate(() =>
@@ -198,7 +198,7 @@ async function detectHumanVerification(page) {
     if (/verifica\s+que\s+eres\s+.*humano|verify\s+you\s+are\s+human|cloudflare|turnstile|captcha/i.test(bodyText)) {
       return true;
     }
-  } catch {}
+  } catch { }
 
   return false;
 }
@@ -229,14 +229,14 @@ async function dismissInterruptions(page) {
       try {
         const btn = page.locator(sel).first();
         if ((await btn.count()) > 0 && (await btn.isVisible())) {
-          await btn.click({ force: true, timeout: 800 }).catch(() => {});
+          await btn.click({ force: true, timeout: 800 }).catch(() => { });
           await page.waitForTimeout(180);
         }
       } catch {
         // keep trying candidates
       }
     }
-    await page.keyboard.press("Escape").catch(() => {});
+    await page.keyboard.press("Escape").catch(() => { });
     await page.waitForTimeout(140);
   }
 }
@@ -255,7 +255,7 @@ async function ensureChatSurfaceReady(page, cfg, timeoutMs) {
     if (input) {
       return { ok: true, status: "ok", input };
     }
-    await page.mouse.wheel(0, randInt(180, 420)).catch(() => {});
+    await page.mouse.wheel(0, randInt(180, 420)).catch(() => { });
     await page.waitForTimeout(240);
   }
   return { ok: false, status: "selector_changed", input: null };
@@ -267,12 +267,8 @@ async function writePrompt(page, inputLocator, prompt) {
   await page.keyboard.press("Control+A");
   await page.keyboard.press("Backspace");
 
-  try {
-    await page.keyboard.type(prompt, { delay: randInt(22, 48) });
-    return;
-  } catch {
-    await inputLocator.fill(prompt);
-  }
+  await page.keyboard.type(prompt, { delay: randInt(22, 48) });
+  return;
 }
 
 async function sendPrompt(page, cfg) {
@@ -515,10 +511,10 @@ async function main() {
         const cap = await safeScreenshot(p, site);
         evidence = cap.path || cap.error || evidence;
       }
-    } catch {}
+    } catch { }
     console.log(JSON.stringify(finish(result, status, false, "", evidence), null, 2));
   } finally {
-    await context.close().catch(() => {});
+    await context.close().catch(() => { });
   }
 }
 
