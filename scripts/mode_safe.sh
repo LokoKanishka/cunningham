@@ -26,7 +26,6 @@ if (!main) {
 main.tools = main.tools || {};
 main.tools.allow = [
   "read",
-  "exec",
   "web_fetch",
   "web_search",
   "memory_search",
@@ -35,6 +34,8 @@ main.tools.allow = [
   "llm-task"
 ];
 main.tools.deny = [
+  "exec",
+  "bash",
   "write",
   "edit",
   "process",
@@ -54,4 +55,5 @@ console.error("mode=safe");
 console.error("patched:", cfg);
 console.error("backup :", bak);
 console.log("main.tools.allow =", JSON.stringify(main.tools.allow));
+console.log("main.tools.deny  =", JSON.stringify(main.tools.deny));
 NODE

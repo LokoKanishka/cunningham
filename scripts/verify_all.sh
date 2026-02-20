@@ -11,6 +11,9 @@ echo "== verify_lobster ==" >&2
 echo "== verify_capabilities ==" >&2
 ./scripts/verify_capabilities.sh 1>&2
 
+echo "== verify_exec_drift ==" >&2
+./scripts/verify_exec_drift.sh 1>&2
+
 echo "== verify_codex_subscription ==" >&2
 ./scripts/verify_codex_subscription.sh
 
