@@ -7,6 +7,7 @@
 const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright");
+const { typeHuman } = require("./ui_human_helpers");
 
 const BASE_URL = process.env.DIRECT_CHAT_URL || "http://127.0.0.1:8787/";
 const OUT_DIR = process.env.OUT_DIR || path.join(process.cwd(), "output", "playwright");
@@ -20,9 +21,8 @@ const QUESTIONS = [
 
 async function ensureCheckbox(page, labelText, checked) {
   const loc = page.getByLabel(labelText, { exact: true });
-  if ((await loc.isChecked()) !== checked) {
-    await loc.click();
-  }
+  if (checked) await loc.check({ timeout: 5000 });
+  else await loc.uncheck({ timeout: 5000 });
 }
 
 async function clickNewSession(page) {
@@ -35,9 +35,7 @@ async function sendAndWait(page, text) {
   const beforeAssistant = await chat.locator(".msg.assistant").count();
 
   const input = page.getByRole("textbox", { name: "Escribi en lenguaje natural..." });
-  await input.click();
-  await input.click();
-  await input.pressSequentially(text, { delay: 35 });
+  await typeHuman(page, input, text, { delayMs: 35, retries: 2, tag: "web_search_q" });
   await page.getByRole("button", { name: "Enviar" }).click();
 
   await page.waitForFunction(
