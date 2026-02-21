@@ -2,6 +2,10 @@
 set -euo pipefail
 export PATH="$HOME/.openclaw/bin:$PATH"
 
+log() {
+  echo "$(date -Is) [web-research] $1"
+}
+
 mkdir -p DOCS/RUNS
 cmd="${1:-check}"
 shift || true
@@ -16,20 +20,18 @@ case "$cmd" in
     q="${*:-openclaw plugins security best practices}"
     ts="$(date +%Y%m%d_%H%M%S)"
     out="DOCS/RUNS/web_research_${ts}.md"
-    raw="$(./scripts/display_isolation.sh run headless -- openclaw agent --agent main --json --timeout 120 \
-      --message "Usa web_search para buscar: $q. Luego usa web_fetch en 2 resultados y devolve un resumen breve con fuentes en markdown." \
-      2>&1 || true)"
+    
+    log "Running local research for: $q"
+    raw="$(./scripts/display_isolation.sh run headless -- node scripts/web_research_playwright.js "$q")"
 
     text="$(printf "%s" "$raw" | node -e '
 const fs=require("fs");
 const raw=fs.readFileSync(0,"utf8");
-const i=raw.indexOf("{"); const j=raw.lastIndexOf("}");
-if(i<0||j<=i){ console.log("PARSE_FAIL"); process.exit(0); }
 try{
-  const o=JSON.parse(raw.slice(i,j+1));
-  const p=Array.isArray(o?.result?.payloads)?o.result.payloads:(Array.isArray(o?.payloads)?o.payloads:[]);
-  console.log(p.map(x=>String(x?.text||"")).join("\n").trim() || "EMPTY");
-}catch{ console.log("PARSE_FAIL"); }
+  const o=JSON.parse(raw);
+  const md = o.results.map(r => `### [${r.url}](${r.url})\n\n${r.text}`).join("\n\n");
+  console.log(md);
+}catch(e){ console.log("PARSE_FAIL: " + e.message); }
 ')"
 
     {

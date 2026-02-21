@@ -54,6 +54,7 @@ args=(
   --dir "$HOME/.npm" --tmpfs "$HOME/.npm"
   --dir "/workspace" --tmpfs "/workspace"
   --ro-bind "$REPOS_DIR" "$REPOS_DIR"
+  --ro-bind "$HOME/Escritorio/cunningham-verde" "$HOME/Escritorio/cunningham-verde"
   --chdir "/workspace"
   --setenv HOME "$HOME"
   --setenv PATH "/usr/local/bin:/usr/bin:/bin"

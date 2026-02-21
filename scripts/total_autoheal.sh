@@ -35,13 +35,23 @@ check_gateway() {
 
 # 2. Monitoreo de Infraestructura (Docker)
 check_infra() {
-  local services=("lucy_brain_n8n" "lucy_eyes_searxng" "lucy_ui_panel" "lucy_memory_redis")
+  # Mapeo de nombre de contenedor a nombre de servicio en docker-compose.yml
+  declare -A service_map=(
+    ["lucy_brain_n8n"]="n8n"
+    ["lucy_eyes_searxng"]="searxng"
+    ["lucy_ui_panel"]="lucy_ui_panel"
+    ["lucy_memory_redis"]="redis"
+    ["lucy_memory_qdrant"]="qdrant"
+    ["lucy_hands_antigravity"]="antigravity"
+  )
+
   local unhealthy=0
-  for s in "${services[@]}"; do
-    if ! docker ps --filter "name=$s" --filter "status=running" | grep -q "$s"; then
-      log "WARNING: Container $s is DOWN. Restarting infra..."
-      # compose_infra might need sudo depending on docker setup, keeping it as is if it was working
-      ./scripts/compose_infra.sh up -d "$s" || true
+  for container in "${!service_map[@]}"; do
+    local service="${service_map[$container]}"
+    if ! docker ps --filter "name=$container" --filter "status=running" | grep -q "$container"; then
+      log "WARNING: Container $container is DOWN. Cleaning up and restarting service $service..."
+      docker rm -f "$container" >/dev/null 2>&1 || true
+      ./scripts/compose_infra.sh up -d "$service" || true
       unhealthy=$((unhealthy + 1))
     fi
   done
@@ -59,16 +69,16 @@ check_ui() {
   fi
 
   # Auto-reparación UI: Limpiar procesos huérfanos de Playwright/Chromium
-  if pgrep -f "chromium" >/dev/null || pgrep -f "playwright" >/dev/null; then
-    # Solo matamos si llevan mucho tiempo o si hay sospecha de cuelgue
-    # Para simplificar V7, si detectamos muchos procesos, limpiamos para asegurar "Zero-State"
-    count=$(pgrep -f "chromium" | wc -l)
-    if [ "$count" -gt 15 ]; then
-      log "WARNING: detected $count chromium processes. Cleaning up for stability..."
-      pkill -f "chromium" || true
-      pkill -f "playwright" || true
-    fi
-  fi
+   if pgrep -f "chromium" >/dev/null || pgrep -f "playwright" >/dev/null || pgrep -f "node" >/dev/null || pgrep -x "nc" >/dev/null; then
+     # Limpieza agresiva de zombies y procesos colgados
+     log "Cleaning up potentially stuck processes (chromium, playwright, node, nc)..."
+     pkill -9 -f "chromium" || true
+     pkill -9 -f "chrome" || true
+     pkill -9 -f "playwright" || true
+     pkill -9 -x "nc" || true
+     # Note: node is critical for n8n, so only kill if it's not managed properly?
+     # Actually, check_infra handles restarting n8n container, so pkill on host's node is fine if any.
+   fi
 }
 
 # 4. Monitoreo del Watcher
