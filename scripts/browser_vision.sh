@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
+[ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ] && { echo "ERROR: No display detected" >&2; exit 1; }
 set -euo pipefail
 export PATH="$HOME/.openclaw/bin:$PATH"
+trap 'kill $(jobs -p) 2>/dev/null || true' EXIT
 
 strict=0
 if [ "${1:-}" = "--strict" ]; then
@@ -12,7 +14,7 @@ cmd="${1:-probe}"
 shift || true
 
 probe_web_fetch() {
-  out="$(openclaw agent --agent main --json --timeout 90 \
+  out="$(./scripts/display_isolation.sh run headless -- openclaw agent --agent main --json --timeout 90 \
     --message 'Usa web_fetch para leer https://example.com y responde en una linea: RESULT=<ok|fail> REASON=<corto>.' \
     2>&1 || true)"
 
@@ -60,7 +62,7 @@ case "$cmd" in
     ;;
   search)
     q="${1:-openclaw}"
-    openclaw agent --agent main --json --timeout 90 \
+    ./scripts/display_isolation.sh run headless -- openclaw agent --agent main --json --timeout 90 \
       --message "Usa web_search con query: $q. Resume en 3 bullets." \
       2>&1
     ;;

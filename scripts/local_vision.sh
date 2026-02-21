@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'kill $(jobs -p) 2>/dev/null || true' EXIT
 
 cmd="${1:-check}"
 shift || true

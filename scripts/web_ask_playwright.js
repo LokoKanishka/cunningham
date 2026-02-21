@@ -114,12 +114,23 @@ function mkResult(site, startedAt) {
   };
 }
 
+function sanitize(text) {
+  if (!text) return "";
+  // Mask API keys, tokens, and sensitive URL params
+  return String(text)
+    .replace(/(?:key|token|auth|session|pass|pwd)=[^&\s]+/gi, "$1=[REDACTED]")
+    .replace(
+      /(?:https?:\/\/[^\s]+)(?:key|token|auth|session|pass|pwd)=[^&\s]+/gi,
+      "[REDACTED_URL]"
+    );
+}
+
 function finish(result, status, ok, text = "", evidence = "") {
   const ended = nowEpoch();
   result.ok = ok;
   result.status = status;
   result.text = text;
-  result.evidence = evidence;
+  result.evidence = sanitize(evidence);
   result.timings.end = ended;
   result.timings.duration = Number((ended - result.timings.start).toFixed(3));
   return result;

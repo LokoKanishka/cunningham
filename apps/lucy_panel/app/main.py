@@ -118,8 +118,14 @@ def run_allowed_smoke(which: str, timeout_s: int = 120) -> dict[str, Any]:
 
     outputs: list[dict[str, Any]] = []
     for cmd in cmds:
+        # Wrap execution in Zero-State Sandbox
+        # We mount REPO_ROOT as read-only to allow access to scripts/
+        sandbox_cmd = [
+            "./scripts/mcp_sandbox_wrapper.sh",
+            "bash", "-lc", cmd
+        ]
         proc = subprocess.run(
-            ["bash", "-lc", cmd],
+            sandbox_cmd,
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,

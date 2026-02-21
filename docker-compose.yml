@@ -57,17 +57,21 @@ services:
       - GENERIC_TIMEZONE=America/Argentina/Buenos_Aires
       - N8N_RESTRICT_FILE_ACCESS_TO=/data/lucy_ipc;/home/node/.n8n-files
       - ANTIGRAVITY_URL=http://127.0.0.1:5000
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-dummy_key_for_n8n_eval}
       - LUCY_IPC_INBOX=/data/lucy_ipc/inbox
       - LUCY_IPC_DEADLETTER=/data/lucy_ipc/deadletter
       - NODE_FUNCTION_ALLOW_BUILTIN=fs,path,crypto
+      - N8N_LOG_LEVEL=warn
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=none
       # Seguridad: n8n corre como root dentro del container para acceder a archivos del host
       # (Se puede ajustar PUID/PGID si es necesario, pero host mode simplifica esto)
     volumes:
       - ./data/n8n:/home/node/.n8n
+      - ./data/n8n:/root/.n8n
       - ./workspace:/data/workspace:rw # Intercambio con Antigravity
       - ./ipc:/data/lucy_ipc:rw # RAM Disk para IPC
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:5678/healthz || exit 1"]
+      test: [ "CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:5678/healthz || exit 1" ]
       interval: 10s
       timeout: 3s
       retries: 12
@@ -80,7 +84,7 @@ services:
     depends_on:
       n8n:
         condition: service_healthy
-    command: ["javascript"]
+    command: [ "javascript" ]
     environment:
       - N8N_RUNNERS_AUTH_TOKEN=lucy-local-runner-token
       - N8N_RUNNERS_TASK_BROKER_URI=http://127.0.0.1:5679
@@ -88,7 +92,7 @@ services:
       - ./config/n8n-task-runners.json:/etc/n8n-task-runners.json:ro
       - ./ipc:/data/lucy_ipc:rw
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:5680/healthz || exit 1"]
+      test: [ "CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:5680/healthz || exit 1" ]
       interval: 10s
       timeout: 3s
       retries: 12
@@ -177,11 +181,7 @@ services:
           cpus: "2.0"
           memory: 4G # Limite estricto para evitar congelamientos
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/healthz', timeout=2)\" || exit 1",
-        ]
+      test: [ "CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/healthz', timeout=2)\" || exit 1" ]
       interval: 10s
       timeout: 3s
       retries: 12
@@ -195,9 +195,9 @@ services:
       n8n:
         condition: service_healthy
     network_mode: "host"
-    command: ["uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "5100"]
+    command: [ "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "5100" ]
     environment:
-      - GATEWAY_URL=http://127.0.0.1:5678/webhook/lucy-input
+      - GATEWAY_URL=http://127.0.0.1:5678/webhook/voice-input
       - IPC_ROOT=/data/lucy_ipc
       - REPO_ROOT=/repo
     volumes:
@@ -205,11 +205,7 @@ services:
       - ./:/repo:rw
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5100/', timeout=2)\" || exit 1",
-        ]
+      test: [ "CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5100/', timeout=2)\" || exit 1" ]
       interval: 10s
       timeout: 3s
       retries: 12
@@ -219,7 +215,7 @@ services:
     container_name: lucy_obs_prometheus
     network_mode: "host"
     restart: unless-stopped
-    profiles: ["observability"]
+    profiles: [ "observability" ]
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus

@@ -181,18 +181,51 @@ def main():
 
             logging.info(f"Oido: {text}")
 
+            import time
+            from datetime import datetime, timezone
             try:
-                res = requests.post(WEBHOOK_URL, json={"text": text}, timeout=60)
+                import jsonschema
+            except ImportError:
+                logging.error("Libreria jsonschema no instalada. Fallando seguro (fail-fast).")
+                continue
+                
+            schema_path = os.path.join(os.path.dirname(__file__), "..", "contracts", "lucy_input_v1.schema.json")
+            try:
+                with open(schema_path, "r", encoding="utf-8") as f:
+                    input_schema = json.load(f)
+            except Exception as e:
+                logging.error(f"Contrato schema inaccesible, descartando flujo sensorial: {e}")
+                continue
+
+            try:
+                payload = {
+                    "kind": "audio_transcription",
+                    "source": "lucy_sensor_client",
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "text": text,
+                    "meta": {"raw_length": len(text)}
+                }
+                # VALIDACION ESTRICTA DEL CONTRATO (Fail-Fast)
+                jsonschema.validate(instance=payload, schema=input_schema)
+            except jsonschema.exceptions.ValidationError as e:
+                logging.error(f"D3: Contrato de entrada violado. Descartando payload por ruido: {e.message}")
+                continue
+
+            # Anti-DDOS: Throttling de ingesta (Pausamos 1.5s entre posts si el flujo es incesante)
+            time.sleep(1.5)
+
+            try:
+                res = requests.post(WEBHOOK_URL, json=payload, timeout=20)
 
                 try:
-                    payload = res.json()
+                    out_payload = res.json()
                     respuesta_final = (
-                        payload.get("response_text")
-                        or payload.get("text")
-                        or payload.get("output")
+                        out_payload.get("response_text")
+                        or out_payload.get("text")
+                        or out_payload.get("output")
                     )
                     if not respuesta_final:
-                        respuesta_final = str(payload)
+                        respuesta_final = str(out_payload)
                 except json.JSONDecodeError:
                     respuesta_final = res.text
 

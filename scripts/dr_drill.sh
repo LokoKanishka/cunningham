@@ -2,62 +2,37 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-BACKUP_BASE="${BACKUP_BASE:-./backups/n8n}"
-WIPE_BASE="${WIPE_BASE:-./_tmp}"
-RESTORE_TIMEOUT="${RESTORE_TIMEOUT:-60}"
-SNAP_RETAIN="${SNAP_RETAIN:-14}"
+# dr_drill.sh — Cunningham Verde: Disaster Recovery Drill (E1)
+# 1. Trigger controlled chaos
+# 2. Wait for autosanación (total_autoheal.sh)
+# 3. Verify total system integrity
 
-TS="$(date +%Y%m%d_%H%M%S)"
-WIPE_DIR="$WIPE_BASE/wipe_${TS}"
-ORIG_DIR="$WIPE_DIR/n8n_original"
-mkdir -p "$WIPE_DIR"
-
-rollback_original_data() {
-  echo "[dr] rollback original data"
-  ./scripts/compose_infra.sh stop n8n >/dev/null || true
-  rm -rf data/n8n
-  if [[ -d "$ORIG_DIR" ]]; then
-    mv "$ORIG_DIR" data/n8n
-  fi
-  ./scripts/compose_infra.sh up -d n8n >/dev/null
-  ./scripts/webhook_smoke.sh || true
+log() {
+  echo "$(date -Is) [dr-drill] $1"
 }
 
-echo "[dr] step=backup"
-RETAIN="$SNAP_RETAIN" BASE_DIR="$BACKUP_BASE" ./scripts/n8n_backup.sh
-BACKUP_DIR="$(ls -1dt "$BACKUP_BASE"/* | head -n 1)"
-echo "[dr] backup_dir=$BACKUP_DIR"
+export CHAOS_ENABLED=true
+export CHAOS_LOG="DOCS/RUNS/chaos_drill.log"
 
-if [[ ! -d data/n8n ]]; then
-  echo "[dr] ERROR missing data/n8n"
-  exit 1
-fi
+log "Step 1: Triggering Chaos..."
+./scripts/chaos_cunningham.sh
 
-echo "[dr] step=wipe_simulation"
-./scripts/compose_infra.sh stop n8n >/dev/null
-mv data/n8n "$ORIG_DIR"
-mkdir -p data/n8n
+log "Step 2: Allowing time for systems to fail/detect..."
+sleep 5
 
-echo "[dr] step=start_blank_n8n"
-./scripts/compose_infra.sh up -d n8n >/dev/null
+log "Step 3: Triggering Total Autoheal..."
+./scripts/total_autoheal.sh
 
-echo "[dr] step=restore"
-if ! BACKUP_DIR="$BACKUP_DIR" TIMEOUT="$RESTORE_TIMEOUT" RUN_SMOKE=true ROLLBACK_ON_FAIL=true ./scripts/n8n_red_button_restore.sh; then
-  echo "[dr] restore failed -> rollback"
-  rollback_original_data
+log "Step 4: Cooling down..."
+sleep 10
+
+log "Step 5: Verifying all systems..."
+if ./scripts/verify_all.sh; then
+  log "SUCCESS: System survived the chaos and recovered."
+  echo "DR_DRILL=PASS"
+  exit 0
+else
+  log "ERROR: System failed to recover fully."
   echo "DR_DRILL=FAIL"
   exit 1
 fi
-
-echo "[dr] step=post_restore_smoke"
-if ! ./scripts/webhook_smoke.sh; then
-  echo "[dr] smoke failed -> rollback"
-  rollback_original_data
-  echo "DR_DRILL=FAIL"
-  exit 1
-fi
-
-echo "[dr] step=cleanup_original_snapshot"
-rm -rf "$ORIG_DIR"
-
-echo "DR_DRILL=PASS backup_dir=$BACKUP_DIR"

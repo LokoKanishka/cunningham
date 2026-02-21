@@ -11,9 +11,10 @@ case "$cmd" in
     echo "RPA_BROWSER_CHECK_OK"
     ;;
   run)
-    openclaw browser start --json >/dev/null
-    openclaw browser open "$url" --json >/dev/null
-    openclaw browser snapshot --format ai --limit 120 --json
+    export ISOLATED_KEEP_UP=0
+    ./scripts/display_isolation.sh run headless -- openclaw browser start --json >/dev/null
+    ./scripts/display_isolation.sh run headless -- openclaw browser open "$url" --json >/dev/null
+    ./scripts/display_isolation.sh run headless -- openclaw browser snapshot --format ai --limit 120 --json
     ;;
   *)
     echo "usage: $0 {check|run [url]}" >&2

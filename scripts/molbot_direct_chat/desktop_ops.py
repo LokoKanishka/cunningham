@@ -40,21 +40,8 @@ def _wmctrl_list() -> dict[str, str]:
     return out
 
 
-def _wmctrl_current_desktop() -> int | None:
-    if not shutil.which("wmctrl"):
-        return None
-    try:
-        proc = subprocess.run(["wmctrl", "-d"], capture_output=True, text=True, timeout=3)
-    except Exception:
-        return None
-    for line in (proc.stdout or "").splitlines():
-        parts = line.split()
-        if len(parts) >= 2 and parts[1] == "*":
-            try:
-                return int(parts[0])
-            except Exception:
-                return None
-    return None
+
+
 
 
 
