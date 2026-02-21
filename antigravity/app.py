@@ -56,26 +56,16 @@ def _effective_timeout(requested: Optional[int]) -> int:
     return min(req, MAX_TIMEOUT_S)
 
 
-def _guard_code(code: str) -> None:
-    # 1. Block destructive bash patterns at string level
-    _DESTRUCTIVE_BASH = [
-        "rm -rf /",
-        "mkfs",
-        "> /dev/sda",
-        "chmod -R 777 /",
-    ]
-    for pattern in _DESTRUCTIVE_BASH:
-        if pattern in code:
-            raise HTTPException(status_code=400, detail=f"Dangerous bash pattern detected: {pattern}")
+from antigravity.sandbox_guard import check_code, SecurityViolation
 
-    # 2. Block interactive/fragile calls, but allow subprocess.run/Popen
-    _BLOCKED_PYTHON = [
-        ("exec(", "exec() is not allowed in sandbox"),
-        ("eval(", "eval() is not allowed in sandbox"),
-    ]
-    for pattern, msg in _BLOCKED_PYTHON:
-        if pattern in code:
-            raise HTTPException(status_code=400, detail=msg)
+def _guard_code(code: str) -> None:
+    try:
+        check_code(code)
+    except SecurityViolation as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except SyntaxError as e:
+        raise HTTPException(status_code=400, detail=f"SyntaxError: {e}")
+
 
 def _collect_artifacts(run_dir: Path) -> List[str]:
     artifacts: List[str] = []
