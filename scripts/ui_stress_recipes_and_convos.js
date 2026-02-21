@@ -10,6 +10,7 @@
 const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright");
+const { typeHuman } = require("./ui_human_helpers");
 
 const BASE_URL = process.env.DIRECT_CHAT_URL || "http://127.0.0.1:8787/";
 const OUT_DIR = process.env.OUT_DIR || path.join(process.cwd(), "output", "playwright");
@@ -61,8 +62,7 @@ async function sendAndWait(page, text) {
   const beforeAssistant = await chat.locator(".msg.assistant").count();
 
   const input = page.getByRole("textbox", { name: "Escribi en lenguaje natural..." });
-  await input.click();
-  await input.pressSequentially(text, { delay: 50 });
+  await typeHuman(page, input, text, { delayMs: 35, retries: 2, tag: "recipes_convos" });
   await page.getByRole("button", { name: "Enviar" }).click();
 
   await page.waitForFunction(

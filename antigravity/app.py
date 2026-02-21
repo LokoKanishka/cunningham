@@ -57,10 +57,25 @@ def _effective_timeout(requested: Optional[int]) -> int:
 
 
 def _guard_code(code: str) -> None:
-    # Minimal guardrail: reject obviously destructive commands.
-    if "rm -rf /" in code:
-        raise HTTPException(status_code=400, detail="Dangerous command rejected.")
+    # 1. Block destructive bash patterns at string level
+    _DESTRUCTIVE_BASH = [
+        "rm -rf /",
+        "mkfs",
+        "> /dev/sda",
+        "chmod -R 777 /",
+    ]
+    for pattern in _DESTRUCTIVE_BASH:
+        if pattern in code:
+            raise HTTPException(status_code=400, detail=f"Dangerous bash pattern detected: {pattern}")
 
+    # 2. Block interactive/fragile calls, but allow subprocess.run/Popen
+    _BLOCKED_PYTHON = [
+        ("exec(", "exec() is not allowed in sandbox"),
+        ("eval(", "eval() is not allowed in sandbox"),
+    ]
+    for pattern, msg in _BLOCKED_PYTHON:
+        if pattern in code:
+            raise HTTPException(status_code=400, detail=msg)
 
 def _collect_artifacts(run_dir: Path) -> List[str]:
     artifacts: List[str] = []

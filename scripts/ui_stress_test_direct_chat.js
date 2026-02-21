@@ -18,6 +18,8 @@ const OPEN_COMMANDS = [
   "abrí firefox https://news.ycombinator.com/",
 ];
 
+const { typeHuman } = require("./ui_human_helpers");
+
 async function ensureCheckbox(page, labelText, checked) {
   const loc = page.getByLabel(labelText, { exact: true });
   if ((await loc.isChecked()) !== checked) {
@@ -30,8 +32,7 @@ async function sendAndWait(page, text) {
   const beforeAssistant = await chat.locator(".msg.assistant").count();
 
   const input = page.getByRole("textbox", { name: "Escribi en lenguaje natural..." });
-  await input.click();
-  await input.pressSequentially(text, { delay: 50 });
+  await typeHuman(page, input, text, { delayMs: 45, retries: 1, tag: "stress_direct_chat" });
   await page.getByRole("button", { name: "Enviar" }).click();
 
   // In non-stream mode, assistant reply is appended as a full message.

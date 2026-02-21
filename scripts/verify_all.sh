@@ -23,6 +23,9 @@ echo "== verify_security_audit ==" >&2
 echo "== verify_community_mcp ==" >&2
 ./scripts/community_mcp.sh check 1>&2
 
+echo "== verify_watcher ==" >&2
+./scripts/verify_watcher.sh 1>&2
+
 echo "== verify_zero_state ==" >&2
 ./scripts/verify_zero_state.sh 1>&2
 
