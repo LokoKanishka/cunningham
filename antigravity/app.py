@@ -10,6 +10,8 @@ import subprocess
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from antigravity.sandbox_guard import check_code, SecurityViolation
+
 
 app = FastAPI(title="Antigravity Sandbox")
 
@@ -57,7 +59,7 @@ def _effective_timeout(requested: Optional[int]) -> int:
 
 
 def _guard_code(code: str) -> None:
-    # 1. Block destructive bash patterns at string level
+    # 1. Fast early-exit: Block destructive bash patterns at string level (Guardrail Legacy)
     _DESTRUCTIVE_BASH = [
         "rm -rf /",
         "mkfs",
@@ -68,14 +70,16 @@ def _guard_code(code: str) -> None:
         if pattern in code:
             raise HTTPException(status_code=400, detail=f"Dangerous bash pattern detected: {pattern}")
 
-    # 2. Block interactive/fragile calls, but allow subprocess.run/Popen
-    _BLOCKED_PYTHON = [
-        ("exec(", "exec() is not allowed in sandbox"),
-        ("eval(", "eval() is not allowed in sandbox"),
-    ]
-    for pattern, msg in _BLOCKED_PYTHON:
-        if pattern in code:
-            raise HTTPException(status_code=400, detail=msg)
+    # 2. Robust AST-based check (Modern Security)
+    try:
+        check_code(code)
+    except SecurityViolation as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        # Fallback for unexpected parsing issues
+        import logging
+        logging.exception("Sandbox check error")
+        raise HTTPException(status_code=400, detail=f"Code validation error: {e}")
 
 
 def _collect_artifacts(run_dir: Path) -> List[str]:
