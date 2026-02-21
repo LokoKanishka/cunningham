@@ -2083,9 +2083,14 @@ def _canonical_site_keys(message: str) -> list[str]:
     return found
 
 
-def _open_firefox_urls(urls: list[str]) -> tuple[list[str], str | None]:
+def _open_firefox_urls(urls: list[str], session_id: str | None = None) -> tuple[list[str], str | None]:
     opened = []
+    desk = _wmctrl_current_desktop()
+    if desk is None:
+        return opened, "No pude detectar el escritorio actual para aislar Firefox."
+
     for url in urls:
+        before_ids = set(_wmctrl_list().keys())
         try:
             subprocess.Popen(
                 ["firefox", "--new-tab", url],
@@ -2093,7 +2098,31 @@ def _open_firefox_urls(urls: list[str]) -> tuple[list[str], str | None]:
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
+            
+            # Wait and verify workspace
+            target = ""
+            for _ in range(30):
+                time.sleep(0.2)
+                now = _wmctrl_list()
+                for wid in now.keys():
+                    if wid not in before_ids:
+                        win_desk = _wmctrl_window_desktop(wid)
+                        if win_desk is not None and win_desk == desk:
+                            target = wid
+                            break
+                if target:
+                    break
+            
+            if not target:
+                return opened, f"Firefox se abrió fuera del workspace {desk} o no fue detectado."
+
             opened.append(url)
+            if session_id:
+                title = _wmctrl_list().get(target, "")
+                _record_browser_windows(
+                    session_id,
+                    [{"win_id": target, "title": title, "url": url, "site_key": "firefox", "ts": time.time()}],
+                )
         except FileNotFoundError:
             return opened, "No pude abrir Firefox: comando no encontrado en el sistema."
         except Exception as e:
@@ -2370,12 +2399,41 @@ def _open_url_with_site_context(url: str, site_key: str | None, session_id: str 
         return None
 
     try:
+        desk = _wmctrl_current_desktop()
+        if desk is None:
+            return "No pude detectar el escritorio actual para aislar Firefox."
+            
+        before_ids = set(_wmctrl_list().keys())
         subprocess.Popen(
             ["firefox", "--new-tab", url],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+        
+        # Wait and verify workspace
+        target = ""
+        for _ in range(30):
+            time.sleep(0.2)
+            now = _wmctrl_list()
+            for wid in now.keys():
+                if wid not in before_ids:
+                    win_desk = _wmctrl_window_desktop(wid)
+                    if win_desk is not None and win_desk == desk:
+                        target = wid
+                        break
+            if target:
+                break
+        
+        if not target:
+            return f"Firefox se abrió fuera del workspace {desk} o no fue detectado."
+
+        if session_id:
+            title = _wmctrl_list().get(target, "")
+            _record_browser_windows(
+                session_id,
+                [{"win_id": target, "title": title, "url": url, "site_key": site_key, "ts": time.time()}],
+            )
         return None
     except FileNotFoundError:
         return "No pude abrir Firefox: comando no encontrado en el sistema."

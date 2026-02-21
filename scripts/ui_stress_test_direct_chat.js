@@ -5,9 +5,14 @@
 // This uses the real browser UI (not the internal API) as requested.
 
 const { chromium } = require("playwright");
+const path = require("path");
 
 const BASE_URL = process.env.DIRECT_CHAT_URL || "http://127.0.0.1:8787/";
 const ROUNDS = Number(process.env.ROUNDS || "5");
+
+if (!process.env.RUNS_DIR && !process.env.OPENCLAW_RUNS_DIR) {
+  process.env.RUNS_DIR = path.join(__dirname, "..", "DOCS", "RUNS");
+}
 
 const OPEN_COMMANDS = [
   "abrí youtube",
@@ -69,12 +74,10 @@ async function main() {
   await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
 
   // Keep it deterministic: disable streaming so we wait for one assistant message per request.
-  await ensureCheckbox(page, "firefox", true);
+  // Ensure tools are enabled
   await ensureCheckbox(page, "web_search", true);
   await ensureCheckbox(page, "web_ask", true);
   await ensureCheckbox(page, "escritorio", true);
-  await ensureCheckbox(page, "modelo", true);
-  await ensureCheckbox(page, "streaming", false);
 
   for (let i = 1; i <= ROUNDS; i++) {
     console.log(`Round ${i}/${ROUNDS}`);

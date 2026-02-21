@@ -3,7 +3,7 @@ set -euo pipefail
 
 export PATH="$HOME/.openclaw/bin:$PATH"
 MODEL="openai-codex/gpt-5.1-codex-mini"
-EXPECT_MODEL_SUB="gpt-5.1-codex-mini"
+EXPECT_MODEL_SUB="gpt-5.1-codex"
 
 echo "== openclaw version ==" >&2
 openclaw --version >&2

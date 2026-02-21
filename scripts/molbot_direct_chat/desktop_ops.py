@@ -21,22 +21,26 @@ def _desktop_dir() -> Path | None:
     return next((p for p in candidates if p.exists() and p.is_dir()), None)
 
 
-def _wmctrl_list() -> dict[str, str]:
+def _wmctrl_list() -> dict[str, tuple[str, int]]:
     if not shutil.which("wmctrl"):
         return {}
     try:
-        proc = subprocess.run(["wmctrl", "-l"], capture_output=True, text=True, timeout=3)
+        proc = subprocess.run(["wmctrl", "-lp"], capture_output=True, text=True, timeout=3)
     except Exception:
         return {}
-    out: dict[str, str] = {}
+    out: dict[str, tuple[str, int]] = {}
     for line in (proc.stdout or "").splitlines():
-        parts = line.split(None, 3)
-        if len(parts) < 4:
+        parts = line.split(None, 4)
+        if len(parts) < 5:
             continue
         win_id = parts[0].strip()
-        title = parts[3].strip()
+        try:
+            desk = int(parts[1])
+        except Exception:
+            continue
+        title = parts[4].strip()
         if win_id and title:
-            out[win_id] = title
+            out[win_id] = (title, desk)
     return out
 
 
@@ -222,7 +226,14 @@ def open_desktop_item(name_hint: str, session_id: str) -> dict:
         if chosen.is_dir() and not record_ids and len(new_ids) == 1:
             record_ids = [new_ids[0]]
 
+        current_desk = _wmctrl_current_desktop()
         for wid in record_ids:
+            title, desk = after.get(wid, ("", -1))
+            # Strict Workspace Check (Guardrail 1 & 6)
+            if current_desk is not None and desk != current_desk:
+                # If it opened in another workspace, we don't track it and we don't move it.
+                # However, for an autonomous worker, this is a failure/warning condition.
+                continue
 
             opened_items.append(
                 {
@@ -230,7 +241,7 @@ def open_desktop_item(name_hint: str, session_id: str) -> dict:
                     "path": str(chosen),
                     "name": chosen.name,
                     "win_id": wid,
-                    "title": after.get(wid, ""),
+                    "title": title,
                     "ts": time.time(),
                 }
             )

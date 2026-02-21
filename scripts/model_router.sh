@@ -37,11 +37,14 @@ case "$cmd" in
     openclaw models set "$m" >/dev/null 2>&1 || true
     openclaw agent --agent main --message "/new $m" --timeout 90 >/dev/null 2>&1 || true
     out="$(run_agent "$msg")"
-    if printf "%s" "$out" | grep -Eiq 'quota|rate limit|temporarily unavailable|429'; then
+    if printf "%s" "$out" | grep -Eiq 'quota|rate limit|temporarily unavailable|429|timeout|socket hang up|econnreset'; then
       if command -v ollama >/dev/null 2>&1; then
+        echo "[WARN] Codex rate-limit detectado. Aplicando fallback a Ollama local..." >&2
         openclaw models set ollama/gpt-oss:20b >/dev/null 2>&1 || true
         openclaw agent --agent main --message '/new ollama/gpt-oss:20b' --timeout 90 >/dev/null 2>&1 || true
         out="$(run_agent "$msg")"
+      else
+        echo "[WARN] Codex rate-limit detectado, pero Ollama no está disponible. Abortando fallback." >&2
       fi
     fi
     printf "%s" "$out"
